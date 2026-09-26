@@ -30,12 +30,9 @@ def apply_mica_style(window):
         window.configure(fg_color=THEME["bg"])
         return
     try:
-        # 1. Apply pywinstyles Mica style
         pywinstyles.apply_style(window, style="mica")
-
         hwnd = pywinstyles.py_win_style.detect(window)
 
-        # 2. Modern Windows 11 (22H2+) backdrop support: 2 = DWMSBT_MAINWINDOW (Mica)
         try:
             backdrop = ctypes.c_int(2)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
@@ -44,7 +41,6 @@ def apply_mica_style(window):
         except Exception:
             pass
 
-        # 3. Force Windows 11 Immersive Dark Mode (DWMWA_USE_IMMERSIVE_DARK_MODE = 20)
         try:
             dark_mode = ctypes.c_int(1)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
@@ -53,7 +49,6 @@ def apply_mica_style(window):
         except Exception:
             pass
 
-        # 4. Style native titlebar and window border to match dark theme
         try:
             pywinstyles.change_header_color(window, "#121215")
         except Exception:
@@ -66,59 +61,38 @@ def apply_mica_style(window):
         window.configure(fg_color=THEME["bg"])
 
 
-# Appearance & Theme Configuration
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# Design Tokens (Monochrome Obsidian Black/Gray/White with Off-White Accents & Buttons)
 THEME = {
-    "bg": "#0a0a0c",                  # Deep charcoal black fallback
-    "card_bg": "#121215",             # Dark glass card surface for guaranteed contrast
-    "card_border": "#27272a",        # Clean zinc-800 border
-    "dropdown_bg": "#18181b",        # Dark zinc dropdown
-    "input_bg": "#18181b",           # Charcoal dark input
-    "input_border": "#27272a",       # Zinc border
-    "input_focus": "#e4e4e7",        # Crisp off-white focus ring
-    "modal_bg": "#121215",           # Charcoal modal
-    "text_primary": "#ffffff",       # Pure crisp white
-    "text_secondary": "#a1a1aa",     # Zinc-400 clean gray
-    "text_muted": "#71717a",         # Zinc-500 muted gray
-    "cyan_badge": "#ffffff",         # Crisp white headers and slider value badges
-    "badge_bg": "#18181b",           # Zinc badge background
-    "badge_border": "#27272a",       # Zinc badge border
-
-    # Sliders (Neutral Monochrome Black/Gray/White)
-    "slider_knob": "#e4e4e7",        # Crisp light zinc thumb
-    "slider_knob_hover": "#ffffff",  # White on hover
-    "slider_progress": "#71717a",    # Neutral gray progress fill
-    "slider_track": "#222226",       # Dark zinc background track
-
-    # Checkboxes (Monochrome Black/Gray/White)
-    "checkbox_active": "#52525b",    # Neutral zinc active check
-    "checkbox_hover": "#71717a",     # Subtle hover
-    "checkbox_border": "#3f3f46",    # Zinc border
-
-    # Primary Action (Start Model Server) - Off-White Luxury Aesthetic
-    "primary_btn_bg": "#f4f4f5",     # Refined off-white
-    "primary_btn_hover": "#ffffff",  # Pure crisp white hover
-    "primary_btn_border": "#ffffff", # Clean white border
-    "primary_btn_text": "#09090b",   # Deep dark charcoal text
-
-    # Secondary Action (Browse, Save, Rename, Detect) - Off-White Aesthetic
-    "secondary_btn_bg": "#e4e4e7",   # Subtle off-white zinc
-    "secondary_btn_hover": "#ffffff",# White on hover
-    "secondary_btn_border": "#d4d4d8",# Off-white silver border
-    "secondary_btn_text": "#09090b", # Deep dark charcoal text
-
-    # Backward-compatible Aliases
-    "btn_maroon": "#f4f4f5",
-    "btn_maroon_hover": "#ffffff",
-    "btn_maroon_border": "#ffffff",
-    "accent_blue": "#f4f4f5",
-    "accent_red": "#e4e4e7",
-    "accent_maroon": "#e4e4e7",
-    "accent_hover": "#ffffff",
-    "accent_glow": "#e4e4e7",
+    "bg": "#0a0a0c",
+    "card_bg": "#121215",
+    "card_border": "#27272a",
+    "dropdown_bg": "#18181b",
+    "input_bg": "#18181b",
+    "input_border": "#27272a",
+    "input_focus": "#e4e4e7",
+    "modal_bg": "#121215",
+    "text_primary": "#ffffff",
+    "text_secondary": "#a1a1aa",
+    "text_muted": "#71717a",
+    "badge_bg": "#18181b",
+    "badge_border": "#27272a",
+    "slider_knob": "#e4e4e7",
+    "slider_knob_hover": "#ffffff",
+    "slider_progress": "#71717a",
+    "slider_track": "#222226",
+    "checkbox_active": "#52525b",
+    "checkbox_hover": "#71717a",
+    "checkbox_border": "#3f3f46",
+    "primary_btn_bg": "#f4f4f5",
+    "primary_btn_hover": "#ffffff",
+    "primary_btn_border": "#ffffff",
+    "primary_btn_text": "#09090b",
+    "secondary_btn_bg": "#e4e4e7",
+    "secondary_btn_hover": "#ffffff",
+    "secondary_btn_border": "#d4d4d8",
+    "secondary_btn_text": "#09090b",
 }
 
 # Pre-defined step ladders
@@ -207,7 +181,7 @@ DEFAULT_PROFILES = [
 
 
 class RenameProfileDialog(ctk.CTkInputDialog):
-    """Custom themed rename dialog matching the Obsidian & Dark Red Aero aesthetic."""
+    """Dialog to rename a profile."""
 
     def __init__(self, curr_name: str, master=None):
         self._initial_name = curr_name
@@ -217,15 +191,14 @@ class RenameProfileDialog(ctk.CTkInputDialog):
             text=f"Enter custom name for '{curr_name}':",
             fg_color=THEME["modal_bg"],
             text_color=THEME["text_primary"],
-            button_fg_color=THEME["accent_red"],
-            button_hover_color=THEME["accent_hover"],
-            button_text_color="#ffffff",
+            button_fg_color=THEME["secondary_btn_bg"],
+            button_hover_color=THEME["secondary_btn_hover"],
+            button_text_color=THEME["secondary_btn_text"],
             entry_fg_color=THEME["input_bg"],
             entry_border_color=THEME["input_border"],
             entry_text_color=THEME["text_primary"],
         )
 
-        # Set taskbar & window icon
         ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
         if not os.path.exists(ico_file):
             ico_file = resource_path("llauncher.ico")
@@ -235,10 +208,8 @@ class RenameProfileDialog(ctk.CTkInputDialog):
             except Exception:
                 pass
 
-        # Apply native Windows Mica styling
         apply_mica_style(self)
 
-        # Center on parent window if available
         if master:
             try:
                 self.update_idletasks()
@@ -319,10 +290,8 @@ class LlamaLauncher(ctk.CTk):
             except Exception:
                 pass
 
-        # Default paths
         self.llama_exe = r"E:\LLAMACPP\llama.cpp\build\bin\Release\llama-server.exe"
 
-        # Typography (Scaled up for maximum clarity & legibility)
         self.font_title = ctk.CTkFont(family="Segoe UI", size=20, weight="bold")
         self.font_subtitle = ctk.CTkFont(family="Segoe UI", size=12)
         self.font_section = ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
@@ -331,29 +300,22 @@ class LlamaLauncher(ctk.CTk):
         self.font_btn = ctk.CTkFont(family="Segoe UI", size=14, weight="bold")
         self.font_sm = ctk.CTkFont(family="Segoe UI", size=11)
 
-        # Device mapping {display_label: device_arg}
         self.device_map = {
             "Vulkan0: AMD Radeon RX 9070 XT": "Vulkan0",
             "Vulkan1: AMD Radeon(TM) Graphics": "Vulkan1",
             "none: CPU Only": "none",
         }
 
-        # Profile state
         self.profiles = []
         self.active_profile_idx = 0
         self._load_profiles()
 
-        # Performance-optimized flat container
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.pack(fill="both", expand=True, padx=16, pady=10)
 
-        # 1. Header with Profile Selector & Status Badge
         self._build_header()
-
-        # 2. Binary & Model Paths (Full-width row)
         self._build_paths_card()
 
-        # 3. Horizontal 3-Column Grid (Direct grid without redundant intermediate wrappers)
         cols_container = ctk.CTkFrame(self.main_container, fg_color="transparent")
         cols_container.pack(fill="both", expand=True, pady=(0, 8))
         cols_container.columnconfigure(0, weight=1)
@@ -361,27 +323,14 @@ class LlamaLauncher(ctk.CTk):
         cols_container.columnconfigure(2, weight=1)
         cols_container.rowconfigure(0, weight=1)
 
-        # Col 1: Hardware & Compute
         self._build_hardware_column(cols_container)
-
-        # Col 2: Batching, Sampling & Toggles
         self._build_batch_sampling_column(cols_container)
-
-        # Col 3: Optional 9070 XT & 32GB RAM Optimizations
         self._build_optimizations_column(cols_container)
-
-        # 4. Launch Action Button (Full width bottom)
         self._build_launch_action()
 
-        # Apply initial active profile
         self._apply_profile(self.profiles[self.active_profile_idx])
-
-        # Apply native Windows Mica styling
         apply_mica_style(self)
-
         self.deiconify()
-
-        # Detect devices asynchronously in background without freezing UI
         self._detect_devices()
 
     def _load_profiles(self):
@@ -463,7 +412,7 @@ class LlamaLauncher(ctk.CTk):
             badge,
             text="● ENGINE READY",
             font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
-            text_color=THEME["cyan_badge"],
+            text_color=THEME["text_primary"],
             padx=10,
             pady=3,
         )
@@ -542,10 +491,10 @@ class LlamaLauncher(ctk.CTk):
                     btn.configure(text_color=THEME["text_secondary"])
 
     def _flash_badge(self, text, is_alert=False):
-        """Temporarily show confirmation feedback on the engine status pill."""
-        color = THEME["accent_glow"] if not is_alert else "#f87171"
+        """Show temporary feedback on status badge."""
+        color = THEME["text_primary"] if not is_alert else "#f87171"
         self.badge_label.configure(text=text, text_color=color)
-        self.after(2200, lambda: self.badge_label.configure(text="● ENGINE READY", text_color=THEME["cyan_badge"]))
+        self.after(2200, lambda: self.badge_label.configure(text="● ENGINE READY", text_color=THEME["text_primary"]))
 
     def _on_profile_selected(self, selected_name):
         """Switch active profile without altering chosen model path."""
@@ -788,7 +737,7 @@ class LlamaLauncher(ctk.CTk):
             card,
             text="Vision mmproj",
             font=self.font_label,
-            text_color=THEME["cyan_badge"],
+            text_color=THEME["text_primary"],
             width=115,
             anchor="w",
         )
@@ -910,7 +859,7 @@ class LlamaLauncher(ctk.CTk):
         return list(self.device_map.keys())[0]
 
     def _build_hardware_column(self, parent):
-        """Column 1: Hardware & Compute Parameters (Optimized single-pass grid)"""
+        """Column 1: Hardware & Compute Parameters."""
         card = ctk.CTkFrame(
             parent,
             fg_color=THEME["card_bg"],
@@ -923,15 +872,13 @@ class LlamaLauncher(ctk.CTk):
         card.columnconfigure(1, weight=1)
         card.columnconfigure(2, weight=0, minsize=55)
 
-        # Title
         ctk.CTkLabel(
             card,
             text="HARDWARE & ACCELERATION",
             font=self.font_section,
-            text_color=THEME["cyan_badge"],
+            text_color=THEME["text_primary"],
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 6))
 
-        # Device
         ctk.CTkLabel(
             card,
             text="Device",
@@ -957,7 +904,6 @@ class LlamaLauncher(ctk.CTk):
         self.device_dropdown.set(self._get_default_device_display())
         self.device_dropdown.grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 6))
 
-        # GPU Layers (-ngl) Slider
         ctk.CTkLabel(
             card,
             text="Layers (-ngl)",
@@ -985,13 +931,12 @@ class LlamaLauncher(ctk.CTk):
             card,
             text="99 (All)",
             font=self.font_badge,
-            text_color=THEME["cyan_badge"],
+            text_color=THEME["text_primary"],
             width=55,
             anchor="e",
         )
         self.ngl_badge.grid(row=2, column=2, sticky="e", padx=(0, 12), pady=(0, 6))
 
-        # Context Length (-c) Slider
         ctk.CTkLabel(
             card,
             text="Context (-c)",
@@ -1019,7 +964,7 @@ class LlamaLauncher(ctk.CTk):
             card,
             text="131K",
             font=self.font_badge,
-            text_color=THEME["cyan_badge"],
+            text_color=THEME["text_primary"],
             width=55,
             anchor="e",
         )
@@ -1100,7 +1045,7 @@ class LlamaLauncher(ctk.CTk):
         self.ctx_badge.configure(text=f"{tokens // 1024}K")
 
     def _build_batch_sampling_column(self, parent):
-        """Column 2: Batching, KV Types, Sampling & Core Toggles (Flattened grid)"""
+        """Column 2: Batching, KV Types, Sampling & Core Toggles."""
         card = ctk.CTkFrame(
             parent,
             fg_color=THEME["card_bg"],
@@ -1113,15 +1058,13 @@ class LlamaLauncher(ctk.CTk):
         card.columnconfigure(1, weight=1)
         card.columnconfigure(2, weight=0, minsize=48)
 
-        # Title
         ctk.CTkLabel(
             card,
             text="BATCHING & GENERATION",
             font=self.font_section,
-            text_color=THEME["cyan_badge"],
+            text_color=THEME["text_primary"],
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 6))
 
-        # Batch Size Slider
         ctk.CTkLabel(
             card,
             text="Batch (-b)",
@@ -1149,13 +1092,12 @@ class LlamaLauncher(ctk.CTk):
             card,
             text="1024",
             font=self.font_badge,
-            text_color=THEME["cyan_badge"],
+            text_color=THEME["text_primary"],
             width=48,
             anchor="e",
         )
         self.batch_badge.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 5))
 
-        # Micro Batch Slider
         ctk.CTkLabel(
             card,
             text="Micro (-ub)",
@@ -1183,7 +1125,7 @@ class LlamaLauncher(ctk.CTk):
             card,
             text="256",
             font=self.font_badge,
-            text_color=THEME["cyan_badge"],
+            text_color=THEME["text_primary"],
             width=48,
             anchor="e",
         )
@@ -1359,7 +1301,7 @@ class LlamaLauncher(ctk.CTk):
         self.ubatch_badge.configure(text=str(UBATCH_STEPS[int(round(val))]))
 
     def _build_optimizations_column(self, parent):
-        """Column 3: RX 9070 XT & 32GB RAM Optional Optimizations (Flattened grid)"""
+        """Column 3: Hardware profile options."""
         card = ctk.CTkFrame(
             parent,
             fg_color=THEME["card_bg"],
@@ -1371,12 +1313,11 @@ class LlamaLauncher(ctk.CTk):
         card.columnconfigure(0, weight=1)
         card.columnconfigure(1, weight=0)
 
-        # Header Title and Hint
         ctk.CTkLabel(
             card,
             text="9070 XT & 32GB PROFILE",
             font=self.font_section,
-            text_color=THEME["cyan_badge"],
+            text_color=THEME["text_primary"],
         ).grid(row=0, column=0, sticky="w", padx=(12, 4), pady=(8, 4))
 
         ctk.CTkLabel(
