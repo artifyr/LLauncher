@@ -131,6 +131,7 @@ DEFAULT_PROFILES = [
             "cache_reuse": {"enabled": True, "val": "256"},
             "parallel": {"enabled": False, "val": "1"},
             "cache_ram": {"enabled": True, "val": "8192"},
+            "cpu_moe": {"enabled": False, "val": "16"},
         },
     },
     {
@@ -155,6 +156,7 @@ DEFAULT_PROFILES = [
             "cache_reuse": {"enabled": False, "val": "256"},
             "parallel": {"enabled": False, "val": "1"},
             "cache_ram": {"enabled": False, "val": "8192"},
+            "cpu_moe": {"enabled": False, "val": "16"},
         },
     },
     {
@@ -179,6 +181,7 @@ DEFAULT_PROFILES = [
             "cache_reuse": {"enabled": True, "val": "256"},
             "parallel": {"enabled": True, "val": "1"},
             "cache_ram": {"enabled": True, "val": "8192"},
+            "cpu_moe": {"enabled": False, "val": "16"},
         },
     },
 ]
@@ -1911,6 +1914,7 @@ class LlamaLauncher(ctk.CTk):
             ("cache_reuse", "KV Cache Reuse (--cache-reuse)", "entry", "256", None),
             ("parallel", "Dedicated Slot (-np)", "entry", "1", None),
             ("cache_ram", "System RAM Cache (--cache-ram MiB)", "entry", "8192", None),
+            ("cpu_moe", "CPU MoE Experts (--n-cpu-moe)", "entry", "16", None),
         ]
 
         for idx, (key, label, w_type, default_val, options) in enumerate(opts_config, start=1):
@@ -2188,6 +2192,9 @@ class LlamaLauncher(ctk.CTk):
         if self.opt_vars["cache_ram"].get():
             val = self.opt_str_vars["cache_ram"].get().strip() or "8192"
             cmd.extend(["--cache-ram", val])
+        if self.opt_vars.get("cpu_moe") and self.opt_vars["cpu_moe"].get():
+            val = self.opt_str_vars["cpu_moe"].get().strip() or "16"
+            cmd.extend(["--n-cpu-moe", val])
 
         # Launch in a dedicated console window with Vulkan memory fix and safe command string
         env = os.environ.copy()

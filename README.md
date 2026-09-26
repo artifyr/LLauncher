@@ -49,6 +49,7 @@ It includes dedicated hardware optimizations tuned for modern high-VRAM GPUs, sp
   - **KV Cache Reuse (`--cache-reuse`)**: Reuses pre-computed prefix tokens across multi-turn chats.
   - **Dedicated Server Slot (`-np 1`)**: Allocates full GPU resources to single-session inference.
   - **RAM Cache Allocation (`--cache-ram`)**: Utilizes excess system RAM for context cache overflow.
+  - **CPU MoE Experts (`--n-cpu-moe`)**: Offloads a specified number of Mixture-of-Experts (MoE) experts to CPU/RAM to fit massive MoE models (e.g. Mixtral, DeepSeek, Qwen-MoE) on consumer VRAM.
 
 - **Multimodal Vision Model Support (`--mmproj`)**:
   - Vision toggle reveals dedicated projector weights path and automatically injects `--mmproj` arguments into the launch command.

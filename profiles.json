@@ -38,8 +38,14 @@
       "cache_ram": {
         "enabled": true,
         "val": "8192"
+      },
+      "cpu_moe": {
+        "enabled": true,
+        "val": "16"
       }
-    }
+    },
+    "vision": false,
+    "mmproj": "D:\\HF Models\\mmproj-f16.gguf"
   },
   {
     "name": "Balanced",
