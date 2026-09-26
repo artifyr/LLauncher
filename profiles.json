@@ -1,0 +1,128 @@
+[
+  {
+    "name": "Max Quality",
+    "ngl": 99,
+    "ctx": 131072,
+    "port": "8082",
+    "threads": "8",
+    "batch": 1024,
+    "ubatch": 256,
+    "ctk": "f16",
+    "ctv": "f16",
+    "temp": "0.7",
+    "topp": "0.95",
+    "minp": "0.05",
+    "fa": true,
+    "jinja": true,
+    "opts": {
+      "mlock": {
+        "enabled": true,
+        "val": "mlock"
+      },
+      "tb": {
+        "enabled": false,
+        "val": "8"
+      },
+      "fit_target": {
+        "enabled": true,
+        "val": "1024"
+      },
+      "cache_reuse": {
+        "enabled": true,
+        "val": "256"
+      },
+      "parallel": {
+        "enabled": false,
+        "val": "1"
+      },
+      "cache_ram": {
+        "enabled": true,
+        "val": "8192"
+      }
+    }
+  },
+  {
+    "name": "Balanced",
+    "ngl": 99,
+    "ctx": 131072,
+    "port": "8082",
+    "threads": "8",
+    "batch": 1024,
+    "ubatch": 256,
+    "ctk": "q8_0",
+    "ctv": "q8_0",
+    "temp": "0.5",
+    "topp": "0.95",
+    "minp": "0.05",
+    "fa": true,
+    "jinja": true,
+    "opts": {
+      "mlock": {
+        "enabled": false,
+        "val": "mlock"
+      },
+      "tb": {
+        "enabled": false,
+        "val": "8"
+      },
+      "fit_target": {
+        "enabled": false,
+        "val": "1024"
+      },
+      "cache_reuse": {
+        "enabled": false,
+        "val": "256"
+      },
+      "parallel": {
+        "enabled": false,
+        "val": "1"
+      },
+      "cache_ram": {
+        "enabled": false,
+        "val": "8192"
+      }
+    }
+  },
+  {
+    "name": "Max Performance",
+    "ngl": 99,
+    "ctx": 32768,
+    "port": "8082",
+    "threads": "8",
+    "batch": 2048,
+    "ubatch": 512,
+    "ctk": "q4_0",
+    "ctv": "q4_0",
+    "temp": "0.5",
+    "topp": "0.9",
+    "minp": "0.05",
+    "fa": true,
+    "jinja": true,
+    "opts": {
+      "mlock": {
+        "enabled": true,
+        "val": "mlock"
+      },
+      "tb": {
+        "enabled": true,
+        "val": "8"
+      },
+      "fit_target": {
+        "enabled": true,
+        "val": "1024"
+      },
+      "cache_reuse": {
+        "enabled": true,
+        "val": "256"
+      },
+      "parallel": {
+        "enabled": true,
+        "val": "1"
+      },
+      "cache_ram": {
+        "enabled": true,
+        "val": "8192"
+      }
+    }
+  }
+]

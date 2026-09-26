@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.venv/
+env/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.exe
+
+# Local profile user overrides (optional, keep default profiles.json if desired)
