@@ -586,11 +586,13 @@ class LlamaLauncher(ctk.CTk):
             exe = self.exe_entry.get().strip() if hasattr(self, "exe_entry") else self.llama_exe
             new_map = {}
             try:
+                no_window_flag = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
                 proc = subprocess.run(
                     [exe, "--list-devices"],
                     capture_output=True,
                     text=True,
                     timeout=4,
+                    creationflags=no_window_flag,
                 )
                 for line in proc.stdout.splitlines():
                     line = line.strip()
