@@ -345,7 +345,7 @@ class ClientConfigDialog(ctk.CTkToplevel):
             anchor="w",
         ).pack(fill="x", pady=(0, 10))
 
-        tabview = ctk.CTkTabview(
+        self.tabview = ctk.CTkTabview(
             container,
             fg_color=THEME["card_bg"],
             segmented_button_fg_color="#18181b",
@@ -353,12 +353,16 @@ class ClientConfigDialog(ctk.CTkToplevel):
             segmented_button_selected_hover_color=THEME["primary_btn_hover"],
             segmented_button_unselected_color="#18181b",
             segmented_button_unselected_hover_color="#27272a",
-            text_color=THEME["primary_btn_text"],
+            text_color="#ffffff",
             corner_radius=8,
             border_width=1,
             border_color=THEME["card_border"],
+            command=self._update_tab_colors,
         )
-        tabview.pack(fill="both", expand=True, pady=(0, 12))
+        self.tabview._segmented_button.configure(
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
+        )
+        self.tabview.pack(fill="both", expand=True, pady=(0, 12))
 
         # Define clients and snippet generators
         clients = [
@@ -369,7 +373,7 @@ class ClientConfigDialog(ctk.CTkToplevel):
         ]
 
         for title, snippet in clients:
-            tab = tabview.add(title)
+            tab = self.tabview.add(title)
             txt = ctk.CTkTextbox(
                 tab,
                 fg_color=THEME["input_bg"],
@@ -399,6 +403,8 @@ class ClientConfigDialog(ctk.CTkToplevel):
             )
             copy_btn.pack(anchor="e", padx=4, pady=(0, 4))
 
+        self._update_tab_colors()
+
         # Bottom close button
         ctk.CTkButton(
             container,
@@ -413,6 +419,19 @@ class ClientConfigDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(family="Segoe UI", size=12),
             command=self.destroy,
         ).pack(fill="x")
+
+    def _update_tab_colors(self):
+        """Ensure unselected tabs have crisp white bold text and selected tab has black text."""
+        if hasattr(self, "tabview") and hasattr(self.tabview, "_segmented_button"):
+            seg = self.tabview._segmented_button
+            current_tab = self.tabview.get()
+            if hasattr(seg, "_buttons_dict"):
+                for name, btn in seg._buttons_dict.items():
+                    btn.configure(font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"))
+                    if name == current_tab:
+                        btn.configure(text_color=THEME["primary_btn_text"])
+                    else:
+                        btn.configure(text_color="#ffffff")
 
     def _copy_to_clipboard(self, text: str, name: str):
         try:
