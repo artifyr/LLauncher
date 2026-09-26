@@ -1,11 +1,15 @@
 import os
 import sys
 import re
+import time
 import json
+import queue
 import ctypes
+import datetime
 import subprocess
 import threading
 import webbrowser
+import collections
 import urllib.request
 import urllib.error
 import customtkinter as ctk
@@ -16,6 +20,13 @@ try:
     HAS_PYWINSTYLES = True
 except ImportError:
     HAS_PYWINSTYLES = False
+
+try:
+    import pystray
+    from PIL import Image
+    HAS_PYSTRAY = True
+except ImportError:
+    HAS_PYSTRAY = False
 
 
 def resource_path(relative_path):
@@ -372,7 +383,7 @@ class ClientConfigDialog(ctk.CTkToplevel):
             ("Open WebUI", self._get_openwebui_snippet()),
             ("SillyTavern", self._get_sillytavern_snippet()),
             ("Continue / Cline", self._get_continue_snippet()),
-            ("Jan / LM Studio", self._get_generic_openai_snippet()),
+            ("Hermes", self._get_hermes_snippet()),
         ]
 
         for title, snippet in clients:
@@ -491,14 +502,30 @@ class ClientConfigDialog(ctk.CTkToplevel):
             f"{json.dumps(config_obj, indent=2)}\n"
         )
 
-    def _get_generic_openai_snippet(self):
+    def _get_hermes_snippet(self):
+        config_obj = {
+            "endpoint": f"http://127.0.0.1:{self.port}/v1",
+            "api_key": "not-needed",
+            "model": self.model_name,
+            "system_prompt": "You are a helpful, precise assistant with advanced reasoning and tool usage capabilities.",
+            "temperature": 0.7,
+            "max_tokens": 4096
+        }
         return (
-            f"=== Jan / LM Studio / LibreChat ===\n\n"
-            f"Base URL:     http://127.0.0.1:{self.port}/v1\n"
-            f"API Key:      any / dummy\n"
-            f"Model:        {self.model_name}\n"
-            f"Chat Path:    http://127.0.0.1:{self.port}/v1/chat/completions\n"
-            f"Models Path:  http://127.0.0.1:{self.port}/v1/models\n"
+            f"=== Hermes Agent / Function Calling Integration ===\n\n"
+            f"# Configuration JSON (or environment variables):\n"
+            f"{json.dumps(config_obj, indent=2)}\n\n"
+            f"# Python SDK Connection (OpenAI Client Compatible):\n"
+            f"from openai import OpenAI\n\n"
+            f"client = OpenAI(\n"
+            f"    base_url='http://127.0.0.1:{self.port}/v1',\n"
+            f"    api_key='not-needed'\n"
+            f")\n\n"
+            f"response = client.chat.completions.create(\n"
+            f"    model='{self.model_name}',\n"
+            f"    messages=[{{'role': 'user', 'content': 'Hello from Hermes!'}}]\n"
+            f")\n"
+            f"print(response.choices[0].message.content)\n"
         )
 
 
@@ -743,6 +770,19 @@ class LlamaLauncher(ctk.CTk):
         self.recent_models = []
         self._load_recent_models()
 
+        # Process management & desktop ergonomics state
+        self.log_queue = queue.Queue()
+        self.log_buffer = collections.deque(maxlen=2000)
+        self.log_drawer_expanded = False
+        self.auto_restart_var = ctk.BooleanVar(value=False)
+        self.external_console_var = ctk.BooleanVar(value=False)
+        self.minimize_to_tray_var = ctk.BooleanVar(value=True)
+        self.log_autoscroll_var = ctk.BooleanVar(value=True)
+        self.manual_stop = False
+        self.crash_count = 0
+        self.last_crash_time = 0
+        self.tray_icon = None
+
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.pack(fill="both", expand=True, padx=16, pady=10)
 
@@ -760,9 +800,12 @@ class LlamaLauncher(ctk.CTk):
         self._build_batch_sampling_column(cols_container)
         self._build_optimizations_column(cols_container)
         self._build_launch_action()
+        self._build_log_drawer()
 
         self._apply_profile(self.profiles[self.active_profile_idx])
         apply_mica_style(self)
+        self._init_tray()
+        self.after(50, self._process_log_queue)
         self.deiconify()
         self._detect_devices()
 
@@ -1995,6 +2038,7 @@ class LlamaLauncher(ctk.CTk):
         action_row.columnconfigure(1, weight=1)
         action_row.columnconfigure(2, weight=1)
         action_row.columnconfigure(3, weight=1)
+        action_row.columnconfigure(4, weight=1)
 
         self.start_btn = ctk.CTkButton(
             action_row,
@@ -2055,7 +2099,303 @@ class LlamaLauncher(ctk.CTk):
             corner_radius=8,
             command=self.open_api_tester,
         )
-        self.api_tester_btn.grid(row=0, column=3, sticky="ew")
+        self.api_tester_btn.grid(row=0, column=3, sticky="ew", padx=(0, 6))
+
+        self.export_script_btn = ctk.CTkButton(
+            action_row,
+            text="💾  Export Script",
+            height=42,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=8,
+            command=self.export_script,
+        )
+        self.export_script_btn.grid(row=0, column=4, sticky="ew")
+
+    def _build_log_drawer(self):
+        """Build bottom collapsible log drawer and desktop ergonomics toolbar."""
+        self.drawer_container = ctk.CTkFrame(self.main_container, fg_color="transparent")
+        self.drawer_container.pack(fill="x", padx=2, pady=(6, 0))
+
+        # Bottom Ergonomics & Drawer Control Toolbar
+        self.drawer_bar = ctk.CTkFrame(self.drawer_container, fg_color="transparent")
+        self.drawer_bar.pack(fill="x")
+
+        # Toggle Button on the left
+        self.drawer_toggle_btn = ctk.CTkButton(
+            self.drawer_bar,
+            text="📝  Log Console (▲ Expand)",
+            height=28,
+            width=180,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            border_width=1,
+            border_color="#3f3f46",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#e4e4e7",
+            corner_radius=6,
+            command=self.toggle_log_drawer,
+        )
+        self.drawer_toggle_btn.pack(side="left", padx=(0, 10))
+
+        # Watchdog & window mode checkboxes
+        self.auto_restart_chk = ctk.CTkCheckBox(
+            self.drawer_bar,
+            text="🔄 Auto-Restart on Crash",
+            variable=self.auto_restart_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_primary"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
+            border_width=2,
+            corner_radius=4,
+            height=24,
+        )
+        self.auto_restart_chk.pack(side="left", padx=(0, 12))
+
+        self.external_console_chk = ctk.CTkCheckBox(
+            self.drawer_bar,
+            text="🪟 External CMD Window",
+            variable=self.external_console_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_primary"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
+            border_width=2,
+            corner_radius=4,
+            height=24,
+        )
+        self.external_console_chk.pack(side="left", padx=(0, 12))
+
+        self.tray_close_chk = ctk.CTkCheckBox(
+            self.drawer_bar,
+            text="📥 Minimize to Tray on Close",
+            variable=self.minimize_to_tray_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_primary"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
+            border_width=2,
+            corner_radius=4,
+            height=24,
+        )
+        self.tray_close_chk.pack(side="left", padx=(0, 10))
+
+        # Tray quick button on the right
+        self.tray_btn = ctk.CTkButton(
+            self.drawer_bar,
+            text="📌  Minimize to Tray",
+            height=28,
+            width=135,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            border_width=1,
+            border_color="#3f3f46",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#a1a1aa",
+            corner_radius=6,
+            command=self.hide_to_tray,
+        )
+        self.tray_btn.pack(side="right")
+
+        # Collapsible Drawer Body (hidden by default)
+        self.drawer_body = ctk.CTkFrame(
+            self.drawer_container,
+            fg_color=THEME["card_bg"],
+            corner_radius=8,
+            border_width=1,
+            border_color=THEME["card_border"],
+        )
+
+        # Header within drawer body: Search / Filter & Actions
+        filter_row = ctk.CTkFrame(self.drawer_body, fg_color="transparent")
+        filter_row.pack(fill="x", padx=8, pady=(8, 4))
+
+        ctk.CTkLabel(
+            filter_row,
+            text="🔍 Filter:",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_secondary"],
+        ).pack(side="left", padx=(0, 6))
+
+        self.log_filter_entry = ctk.CTkEntry(
+            filter_row,
+            placeholder_text="Filter logs by keyword or regex...",
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_primary"],
+            placeholder_text_color=THEME["text_muted"],
+            corner_radius=6,
+            height=26,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+        )
+        self.log_filter_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.log_filter_entry.bind("<KeyRelease>", self._on_log_filter_changed)
+
+        ctk.CTkCheckBox(
+            filter_row,
+            text="Auto-Scroll",
+            variable=self.log_autoscroll_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_secondary"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
+            border_width=2,
+            corner_radius=4,
+            height=24,
+            width=20,
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            filter_row,
+            text="📋 Copy",
+            height=26,
+            width=65,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            border_width=1,
+            border_color="#3f3f46",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#e4e4e7",
+            corner_radius=6,
+            command=self.copy_logs,
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            filter_row,
+            text="🗑️ Clear",
+            height=26,
+            width=65,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            border_width=1,
+            border_color="#3f3f46",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#e4e4e7",
+            corner_radius=6,
+            command=self.clear_logs,
+        ).pack(side="left")
+
+        # Terminal text box
+        self.log_textbox = ctk.CTkTextbox(
+            self.drawer_body,
+            height=140,
+            fg_color="#0e0e11",
+            border_color="#222226",
+            border_width=1,
+            text_color="#e4e4e7",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            corner_radius=6,
+            wrap="none",
+        )
+        self.log_textbox.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.log_textbox.insert("1.0", "[SYSTEM] Log console initialized. Ready to stream llama-server engine output.\n")
+        self.log_textbox.configure(state="disabled")
+
+    def toggle_log_drawer(self):
+        """Expand or collapse the in-window embedded log drawer."""
+        self.log_drawer_expanded = not self.log_drawer_expanded
+        curr_w = self.winfo_width()
+        curr_h = self.winfo_height()
+
+        if self.log_drawer_expanded:
+            self.drawer_body.pack(fill="both", expand=True, pady=(6, 0))
+            self.drawer_toggle_btn.configure(text="📝  Log Console (▼ Collapse)")
+            if curr_h < 750:
+                self.geometry(f"{max(curr_w, 1184)}x{max(curr_h + 175, 795)}")
+        else:
+            self.drawer_body.pack_forget()
+            self.drawer_toggle_btn.configure(text="📝  Log Console (▲ Expand)")
+            if curr_h >= 750:
+                self.geometry(f"{max(curr_w, 1184)}x{max(curr_h - 175, 625)}")
+
+    def open_log_console(self):
+        """Bring window to foreground and ensure log drawer is open."""
+        self.show_window()
+        if not self.log_drawer_expanded:
+            self.toggle_log_drawer()
+
+    def _on_log_filter_changed(self, event=None):
+        """Filter log lines in real-time according to search text or regex."""
+        if not hasattr(self, "log_textbox") or not hasattr(self, "log_filter_entry"):
+            return
+        query = self.log_filter_entry.get().strip().lower()
+        self.log_textbox.configure(state="normal")
+        self.log_textbox.delete("1.0", "end")
+        for line in self.log_buffer:
+            if not query or query in line.lower():
+                self.log_textbox.insert("end", line)
+        self.log_textbox.configure(state="disabled")
+        if self.log_autoscroll_var.get():
+            try:
+                self.log_textbox.see("end")
+            except Exception:
+                pass
+
+    def _process_log_queue(self):
+        """Pull real-time stdout lines from worker queue and stream to textbox."""
+        lines_added = False
+        query = self.log_filter_entry.get().strip().lower() if hasattr(self, "log_filter_entry") else ""
+
+        while True:
+            try:
+                line = self.log_queue.get_nowait()
+                self.log_buffer.append(line)
+                if not query or query in line.lower():
+                    self._append_to_log_textbox(line)
+                    lines_added = True
+            except queue.Empty:
+                break
+
+        if lines_added and self.log_autoscroll_var.get() and hasattr(self, "log_textbox"):
+            try:
+                self.log_textbox.see("end")
+            except Exception:
+                pass
+
+        self.after(50, self._process_log_queue)
+
+    def _append_to_log_textbox(self, line: str):
+        if not hasattr(self, "log_textbox"):
+            return
+        self.log_textbox.configure(state="normal")
+        self.log_textbox.insert("end", line)
+        self.log_textbox.configure(state="disabled")
+
+    def _log_system(self, msg: str):
+        """Write a formatted system/launcher notification line to the log console."""
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        formatted = f"[{timestamp}] {msg}\n"
+        self.log_queue.put(formatted)
+
+    def clear_logs(self):
+        """Clear current buffer and log textbox contents."""
+        self.log_buffer.clear()
+        if hasattr(self, "log_textbox"):
+            self.log_textbox.configure(state="normal")
+            self.log_textbox.delete("1.0", "end")
+            self.log_textbox.configure(state="disabled")
+
+    def copy_logs(self):
+        """Copy all visible logs to the Windows clipboard."""
+        if hasattr(self, "log_textbox"):
+            content = self.log_textbox.get("1.0", "end-1c")
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(content)
+                self.update()
+                self._flash_badge("✓ COPIED ALL LOGS")
+            except Exception:
+                pass
 
     def open_web_ui(self):
         """Open local llama-server web UI in the default browser."""
@@ -2064,8 +2404,10 @@ class LlamaLauncher(ctk.CTk):
         try:
             webbrowser.open(url)
             self._flash_badge(f"● OPENED BROWSER: PORT {port}")
+            self._log_system(f"🌐 Opened browser to {url}")
         except Exception as e:
             self._flash_badge(f"⚠ FAILED TO OPEN BROWSER: {e}", is_alert=True)
+            self._log_system(f"⚠ Failed to open browser: {e}")
 
     def open_client_configs(self):
         """Open the Client & Frontend Integrations configuration dialog."""
@@ -2097,32 +2439,20 @@ class LlamaLauncher(ctk.CTk):
             self._add_recent_model(norm_path)
             self._auto_detect_vision_mmproj(norm_path)
 
-    def toggle_server(self):
-        """Toggle server between running and stopped."""
-        if self.server_proc is not None and self.server_proc.poll() is None:
-            self.stop_server()
-        else:
-            self.start_server()
-
-    def launch(self):
-        """Backwards-compatible alias for start_server."""
-        self.start_server()
-
-    def start_server(self):
+    def _build_command_args(self):
+        """Validate input paths and construct full argument list for llama-server."""
         exe_raw = self.exe_entry.get().strip().strip('"').strip("'")
         model_raw = self.model_entry.get().strip().strip('"').strip("'")
         if not model_raw:
             self._flash_badge("⚠ SELECT MODEL GGUF", is_alert=True)
-            return
+            return None
 
         exe = os.path.normpath(exe_raw)
         model = os.path.normpath(model_raw)
 
         if not os.path.exists(exe):
             self._flash_badge("⚠ INVALID LLAMA-SERVER PATH", is_alert=True)
-            return
-
-        self._add_recent_model(model)
+            return None
 
         # Vision Model mmproj validation
         mmproj = ""
@@ -2130,14 +2460,12 @@ class LlamaLauncher(ctk.CTk):
             mmproj_raw = self.mmproj_entry.get().strip().strip('"').strip("'")
             if not mmproj_raw:
                 self._flash_badge("⚠ SELECT MMPROJ GGUF", is_alert=True)
-                return
+                return None
             mmproj = os.path.normpath(mmproj_raw)
 
-        # Resolve selected device argument (e.g. "Vulkan0")
         selected_device_display = self.device_dropdown.get()
         device_id = self.device_map.get(selected_device_display, "Vulkan0")
 
-        # Resolve sliders
         gpu_layers = str(int(round(self.ngl_slider.get())))
         ctx_tokens = str(CTX_STEPS[int(round(self.ctx_slider.get()))])
         batch_size = str(BATCH_STEPS[int(round(self.batch_slider.get()))])
@@ -2148,7 +2476,6 @@ class LlamaLauncher(ctk.CTk):
             "-m", model,
         ]
 
-        # Vision Model: Pass mmproj tag if enabled
         if self.vision_var.get() and mmproj:
             cmd.extend(["--mmproj", mmproj])
 
@@ -2173,7 +2500,6 @@ class LlamaLauncher(ctk.CTk):
         if self.jinja_var.get():
             cmd.append("--jinja")
 
-        # Apply checked optional optimizations
         if self.opt_vars["mlock"].get():
             val = self.opt_str_vars["mlock"].get().strip() or "mlock"
             cmd.extend(["--load-mode", val])
@@ -2196,18 +2522,147 @@ class LlamaLauncher(ctk.CTk):
             val = self.opt_str_vars["cpu_moe"].get().strip() or "16"
             cmd.extend(["--n-cpu-moe", val])
 
-        # Launch in a dedicated console window with Vulkan memory fix and safe command string
+        return cmd
+
+    def export_script(self):
+        """Export current configuration as a standalone PowerShell (.ps1) or Batch (.bat) script."""
+        cmd_args = self._build_command_args()
+        if not cmd_args:
+            return
+
+        exe = cmd_args[0]
+        args_list = cmd_args[1:]
+        model_name = os.path.basename(self.model_entry.get().strip() or "model.gguf")
+        suggested_name = f"run_{os.path.splitext(model_name)[0]}"
+
+        file_path = filedialog.asksaveasfilename(
+            title="Export CLI Launcher Script",
+            initialfile=suggested_name,
+            defaultextension=".ps1",
+            filetypes=[
+                ("PowerShell Script (*.ps1)", "*.ps1"),
+                ("Batch Script (*.bat)", "*.bat"),
+                ("All Files (*.*)", "*.*"),
+            ]
+        )
+        if not file_path:
+            return
+
+        is_ps1 = file_path.lower().endswith(".ps1")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if is_ps1:
+            ps_args = "\n    ".join([f'"{arg}"' for arg in args_list])
+            content = (
+                f"# =====================================================================\n"
+                f"# LLauncher - Exported llama-server PowerShell Script\n"
+                f"# Model: {model_name}\n"
+                f"# Generated: {timestamp}\n"
+                f"# =====================================================================\n\n"
+                f"$env:GGML_VK_DISABLE_PINNED = '1'\n\n"
+                f"$llamaExe = \"{exe}\"\n\n"
+                f"$serverArgs = @(\n"
+                f"    {ps_args}\n"
+                f")\n\n"
+                f"Write-Host \"Starting llama-server for {model_name}...\" -ForegroundColor Cyan\n"
+                f"& $llamaExe @serverArgs\n"
+            )
+        else:
+            bat_cmd = f'"{exe}" ' + " ".join([f'"{a}"' if ' ' in a else a for a in args_list])
+            content = (
+                f"@echo off\n"
+                f"REM =====================================================================\n"
+                f"REM LLauncher - Exported llama-server Batch Script\n"
+                f"REM Model: {model_name}\n"
+                f"REM Generated: {timestamp}\n"
+                f"REM =====================================================================\n\n"
+                f"set \"GGML_VK_DISABLE_PINNED=1\"\n\n"
+                f"echo Starting llama-server for {model_name}...\n"
+                f"{bat_cmd}\n\n"
+                f"pause\n"
+            )
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            self._flash_badge(f"✓ EXPORTED: {os.path.basename(file_path)}")
+            self._log_system(f"💾 Exported CLI script to: {file_path}")
+        except Exception as e:
+            self._flash_badge(f"⚠ EXPORT FAILED: {e}", is_alert=True)
+            self._log_system(f"⚠ Export failed: {e}")
+
+    def toggle_server(self):
+        """Toggle server between running and stopped."""
+        if self.is_server_running():
+            self.stop_server()
+        else:
+            self.start_server()
+
+    def launch(self):
+        """Backwards-compatible alias for start_server."""
+        self.start_server()
+
+    def is_server_running(self):
+        """Return True if the llama-server child process is currently alive."""
+        return self.server_proc is not None and self.server_proc.poll() is None
+
+    def start_server(self):
+        """Launch the llama-server engine with real-time logging and optional watchdog monitoring."""
+        cmd = self._build_command_args()
+        if not cmd:
+            return
+
+        self.manual_stop = False
+        self._add_recent_model(os.path.normpath(self.model_entry.get().strip().strip('"').strip("'")))
+
         env = os.environ.copy()
         env["GGML_VK_DISABLE_PINNED"] = "1"
-        full_cmd = f'cmd.exe /k "{subprocess.list2cmdline(cmd)}"'
+
+        port = self.port_entry.get().strip()
+        self._log_system(f"🚀 Launching llama-server on port {port}...")
+        self._log_system(f"Command: {subprocess.list2cmdline(cmd)}")
+
         try:
-            self.server_proc = subprocess.Popen(
-                full_cmd,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                env=env,
-            )
+            if self.external_console_var.get():
+                full_cmd = f'cmd.exe /k "{subprocess.list2cmdline(cmd)}"'
+                self.server_proc = subprocess.Popen(
+                    full_cmd,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    env=env,
+                )
+                self._log_system("[SYSTEM] Process running in dedicated external console window.")
+            else:
+                no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                self.server_proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True,
+                    creationflags=no_window,
+                    env=env,
+                )
+
+                def reader(proc, log_q):
+                    try:
+                        for line in iter(proc.stdout.readline, ''):
+                            if not line:
+                                break
+                            log_q.put(line)
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            proc.stdout.close()
+                        except Exception:
+                            pass
+
+                threading.Thread(target=reader, args=(self.server_proc, self.log_queue), daemon=True).start()
+                self._log_system("[SYSTEM] Live stdout/stderr pipe attached. Streaming output to embedded console.")
         except Exception as e:
             self._flash_badge(f"⚠ FAILED TO LAUNCH: {e}", is_alert=True)
+            self._log_system(f"⚠ Failed to launch: {e}")
             return
 
         # Update button to Stop Model Server state (Crimson danger state)
@@ -2231,7 +2686,10 @@ class LlamaLauncher(ctk.CTk):
 
     def stop_server(self):
         """Cleanly terminate running llama-server process and console window."""
+        self.manual_stop = True
+        self.crash_count = 0
         if self.server_proc is not None:
+            self._log_system("🛑 Stopping llama-server process...")
             try:
                 no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
                 subprocess.run(
@@ -2249,6 +2707,16 @@ class LlamaLauncher(ctk.CTk):
 
         self._reset_server_btn_ui()
         self._flash_badge("● SERVER STOPPED")
+        self._log_system("[SYSTEM] Server stopped successfully.")
+
+    def restart_server(self):
+        """Stop current server if running, wait briefly, and start again."""
+        self._log_system("[SERVER] Restart initiated...")
+        if self.is_server_running():
+            self.stop_server()
+            self.after(800, self.start_server)
+        else:
+            self.start_server()
 
     def _reset_server_btn_ui(self):
         """Reset launch button styling back to off-white start state."""
@@ -2269,18 +2737,87 @@ class LlamaLauncher(ctk.CTk):
             )
 
     def _poll_server_status(self):
-        """Check if server process is still alive and reset button when it terminates."""
+        """Check if server process is still alive and trigger watchdog auto-restart if crashed."""
         if self.server_proc is not None:
-            if self.server_proc.poll() is not None:
+            exit_code = self.server_proc.poll()
+            if exit_code is not None:
                 self.server_proc = None
                 self._reset_server_btn_ui()
                 self._flash_badge("● SERVER OFFLINE")
+
+                if not self.manual_stop:
+                    self._log_system(f"⚠ [CRASH WATCHDOG] Engine terminated unexpectedly with exit code: {exit_code}")
+                    self._flash_badge(f"⚠ CRASH DETECTED (Exit {exit_code})", is_alert=True)
+                    if self.auto_restart_var.get():
+                        now = time.time()
+                        if now - self.last_crash_time < 30:
+                            self.crash_count += 1
+                        else:
+                            self.crash_count = 1
+                        self.last_crash_time = now
+
+                        if self.crash_count > 5:
+                            self._log_system("[WATCHDOG] 🛑 Auto-restart halted: 5 rapid crash events detected within 30 seconds.")
+                            self._flash_badge("⚠ AUTO-RESTART HALTED", is_alert=True)
+                        else:
+                            self._log_system(f"[WATCHDOG] 🔄 Auto-restarting server in 2 seconds... (Attempt {self.crash_count}/5)")
+                            self._flash_badge(f"● RESTARTING IN 2s ({self.crash_count}/5)...")
+                            self.after(2000, self._do_auto_restart)
             else:
                 self.after(500, self._poll_server_status)
 
-    def _on_close(self):
-        """Clean up background server before closing application."""
-        if self.server_proc is not None and self.server_proc.poll() is None:
+    def _do_auto_restart(self):
+        """Execute automatic server restart from watchdog timer."""
+        if not self.manual_stop and not self.is_server_running():
+            self._log_system("[WATCHDOG] 🚀 Triggering auto-restart now...")
+            self.start_server()
+
+    def _init_tray(self):
+        """Initialize Windows notification tray icon and context menu."""
+        if not HAS_PYSTRAY:
+            return
+        try:
+            ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
+            if os.path.exists(ico_file):
+                tray_img = Image.open(ico_file)
+            else:
+                logo_file = resource_path(os.path.join("assets", "Logo.png"))
+                if os.path.exists(logo_file):
+                    tray_img = Image.open(logo_file).resize((64, 64), Image.Resampling.LANCZOS)
+                else:
+                    tray_img = Image.new("RGBA", (64, 64), (16, 16, 20, 255))
+
+            menu = pystray.Menu(
+                pystray.MenuItem("Show LLauncher", lambda: self.after(0, self.show_window), default=True),
+                pystray.MenuItem("Hide to Tray", lambda: self.after(0, self.hide_to_tray)),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Start Model Server", lambda: self.after(0, self.start_server), visible=lambda item: not self.is_server_running()),
+                pystray.MenuItem("Stop Model Server", lambda: self.after(0, self.stop_server), visible=lambda item: self.is_server_running()),
+                pystray.MenuItem("Restart Model Server", lambda: self.after(0, self.restart_server)),
+                pystray.MenuItem("View Logs", lambda: self.after(0, self.open_log_console)),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Exit", lambda: self.after(0, self._exit_app)),
+            )
+            self.tray_icon = pystray.Icon("LLauncher", tray_img, "LLauncher - llama.cpp", menu)
+            threading.Thread(target=self.tray_icon.run, daemon=True).start()
+        except Exception:
+            self.tray_icon = None
+
+    def show_window(self):
+        """Restore window from system tray and bring to front."""
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def hide_to_tray(self):
+        """Minimize launcher to the notification area."""
+        self.withdraw()
+        self._flash_badge("● MINIMIZED TO TRAY")
+
+    def _exit_app(self):
+        """Full exit routine stopping background server and destroying tray icon."""
+        self.manual_stop = True
+        if self.is_server_running():
             try:
                 no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
                 subprocess.run(
@@ -2290,7 +2827,27 @@ class LlamaLauncher(ctk.CTk):
                 )
             except Exception:
                 pass
+            try:
+                self.server_proc.kill()
+            except Exception:
+                pass
+            self.server_proc = None
+
+        if hasattr(self, "tray_icon") and self.tray_icon is not None:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+            self.tray_icon = None
+
         self.destroy()
+
+    def _on_close(self):
+        """Clean up background server or minimize to tray on window close."""
+        if self.minimize_to_tray_var.get() and HAS_PYSTRAY:
+            self.hide_to_tray()
+        else:
+            self._exit_app()
 
 
 if __name__ == "__main__":

@@ -17,6 +17,9 @@ datas += tmp_ctk[0]; binaries += tmp_ctk[1]; hiddenimports += tmp_ctk[2]
 tmp_pws = collect_all('pywinstyles')
 datas += tmp_pws[0]; binaries += tmp_pws[1]; hiddenimports += tmp_pws[2]
 
+tmp_pst = collect_all('pystray')
+datas += tmp_pst[0]; binaries += tmp_pst[1]; hiddenimports += tmp_pst[2]
+
 a = Analysis(
     [os.path.join(base_dir, 'launcher.py')],
     pathex=[base_dir],

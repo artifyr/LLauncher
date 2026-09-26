@@ -56,13 +56,15 @@ It includes dedicated hardware optimizations tuned for modern high-VRAM GPUs, sp
 
 - **Frontend & Client Integrations**:
   - **"Open Web UI" Quick Launcher**: One-click button (`🌐 Open Web UI`) automatically enabled when the server is online to launch the local web interface (`http://127.0.0.1:<port>`) in your default browser.
-  - **One-Click Client Configurations**: Pre-formatted snippets and instant copy-paste setup configs for OpenAI-compatible frontends, including **Open WebUI**, **SillyTavern**, **Continue / Cline** (VS Code / JetBrains), and **Jan / LM Studio / LibreChat**.
+  - **One-Click Client Configurations**: Pre-formatted snippets and instant copy-paste setup configs for OpenAI-compatible frontends, including **Open WebUI**, **SillyTavern**, **Continue / Cline** (VS Code / JetBrains), and **Hermes Agent** (Nous Research / tool calling).
   - **API Endpoint Tester & Health Check**: Built-in ping and diagnostic tool to test `/v1/models` and `/v1/chat/completions` directly inside LLauncher to verify server status, responsiveness, and inference latency.
 
-- **Live Server Lifecycle & Process Management**:
-  - Dual-state Start / Stop action button with real-time status polling.
-  - Switches to a crimson danger button (`🛑 Stop Model Server`) once online.
-  - Safe child process tree termination (`taskkill /F /T /PID`) cleanly closes background server and console windows on stop or window close.
+- **Process Management & Desktop Ergonomics**:
+  - **System Tray Integration**: Minimize LLauncher to the Windows notification tray with an active background presence. Right-click context menu provides instant controls: `Show LLauncher`, `Hide to Tray`, `Start Model Server`, `Stop Model Server`, `Restart Model Server`, `View Logs`, and `Exit`.
+  - **Collapsible Embedded Log Console**: Built-in terminal drawer that streams real-time stdout and stderr output directly from `llama-server.exe` into an expandable in-window console. Features real-time keyword/regex search and filtering, auto-scroll toggle, buffer clearing, and one-click log copying.
+  - **Auto-Restart Watchdog**: Real-time process watchdog that detects abnormal engine termination or driver crashes and automatically reboots the model server within 2 seconds, equipped with rate-limiting guards against rapid crash loops.
+  - **Export CLI Script / PowerShell Launcher**: One-click script generator (`💾 Export Script`) saving active parameters, paths, and environment flags (`GGML_VK_DISABLE_PINNED=1`) into clean, standalone PowerShell (`.ps1`) or Windows Batch (`.bat`) scripts for headless servers and automation.
+  - **Configurable Console Modes**: Seamlessly toggle between headless execution with live in-app log streaming or running in an external dedicated Command Prompt window.
 
 - **Vulkan Memory Stability**:
   - Automatically injects `GGML_VK_DISABLE_PINNED=1` into the server process environment to prevent driver memory allocation crashes on AMD Radeon GPUs.
@@ -94,7 +96,7 @@ It includes dedicated hardware optimizations tuned for modern high-VRAM GPUs, sp
 
 - **Operating System**: Windows 10 or Windows 11 (64-bit, Windows 11 recommended for Mica effect)
 - **Python Version**: Python 3.10 to 3.14
-- **Dependencies**: `customtkinter`, `pywinstyles`
+- **Dependencies**: `customtkinter`, `pywinstyles`, `pystray`, `pillow`
 - **Backend Engine**: `llama-server.exe` from a recent release of [`llama.cpp`](https://github.com/ggml-org/llama.cpp)
 
 ---
