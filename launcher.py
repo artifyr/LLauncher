@@ -5,6 +5,9 @@ import json
 import ctypes
 import subprocess
 import threading
+import webbrowser
+import urllib.request
+import urllib.error
 import customtkinter as ctk
 from tkinter import filedialog
 
@@ -270,13 +273,417 @@ class RenameProfileDialog(ctk.CTkInputDialog):
             )
 
 
+class ClientConfigDialog(ctk.CTkToplevel):
+    """Modal dialog displaying one-click configuration snippets for popular frontends."""
+
+    def __init__(self, port: str, model_path: str, master=None):
+        super().__init__(master)
+        self.port = port or "8082"
+        self.model_path = model_path or "Loaded Model"
+        self.model_name = os.path.basename(self.model_path) if self.model_path else "default"
+        self.title("Client & Frontend Integrations")
+        self.geometry("640x510")
+        self.minsize(580, 440)
+        self.configure(fg_color=THEME["modal_bg"])
+        self.transient(master)
+        self.grab_set()
+
+        ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
+        if not os.path.exists(ico_file):
+            ico_file = resource_path("llauncher.ico")
+        if os.path.exists(ico_file):
+            try:
+                self.iconbitmap(ico_file)
+            except Exception:
+                pass
+
+        apply_mica_style(self)
+
+        if master:
+            try:
+                self.update_idletasks()
+                m_x = master.winfo_x()
+                m_y = master.winfo_y()
+                m_w = master.winfo_width()
+                m_h = master.winfo_height()
+                d_w, d_h = 640, 510
+                pos_x = max(0, m_x + (m_w - d_w) // 2)
+                pos_y = max(0, m_y + (m_h - d_h) // 2)
+                self.geometry(f"{d_w}x{d_h}+{pos_x}+{pos_y}")
+            except Exception:
+                pass
+
+        self._build_ui()
+
+    def _build_ui(self):
+        container = ctk.CTkFrame(self, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=16, pady=16)
+
+        header = ctk.CTkFrame(container, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(
+            header,
+            text="Client & Frontend Configurations",
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(side="left")
+
+        self.copied_badge = ctk.CTkLabel(
+            header,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#4ade80",
+        )
+        self.copied_badge.pack(side="right", padx=4)
+
+        ctk.CTkLabel(
+            container,
+            text="Copy pre-configured endpoints and setup JSON for OpenAI-compatible tools and chat UIs:",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+        ).pack(fill="x", pady=(0, 10))
+
+        tabview = ctk.CTkTabview(
+            container,
+            fg_color=THEME["card_bg"],
+            segmented_button_fg_color="#18181b",
+            segmented_button_selected_color=THEME["primary_btn_bg"],
+            segmented_button_selected_hover_color=THEME["primary_btn_hover"],
+            segmented_button_unselected_color="#18181b",
+            segmented_button_unselected_hover_color="#27272a",
+            text_color=THEME["primary_btn_text"],
+            corner_radius=8,
+            border_width=1,
+            border_color=THEME["card_border"],
+        )
+        tabview.pack(fill="both", expand=True, pady=(0, 12))
+
+        # Define clients and snippet generators
+        clients = [
+            ("Open WebUI", self._get_openwebui_snippet()),
+            ("SillyTavern", self._get_sillytavern_snippet()),
+            ("Continue / Cline", self._get_continue_snippet()),
+            ("Jan / LM Studio", self._get_generic_openai_snippet()),
+        ]
+
+        for title, snippet in clients:
+            tab = tabview.add(title)
+            txt = ctk.CTkTextbox(
+                tab,
+                fg_color=THEME["input_bg"],
+                border_color=THEME["input_border"],
+                border_width=1,
+                text_color=THEME["text_primary"],
+                font=ctk.CTkFont(family="Consolas", size=11),
+                corner_radius=6,
+                wrap="none",
+            )
+            txt.insert("1.0", snippet)
+            txt.configure(state="disabled")
+            txt.pack(fill="both", expand=True, padx=4, pady=(4, 8))
+
+            copy_btn = ctk.CTkButton(
+                tab,
+                text="📋  Copy Configuration",
+                height=30,
+                fg_color=THEME["secondary_btn_bg"],
+                hover_color=THEME["secondary_btn_hover"],
+                border_width=1,
+                border_color=THEME["secondary_btn_border"],
+                text_color=THEME["secondary_btn_text"],
+                corner_radius=6,
+                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                command=lambda s=snippet, n=title: self._copy_to_clipboard(s, n),
+            )
+            copy_btn.pack(anchor="e", padx=4, pady=(0, 4))
+
+        # Bottom close button
+        ctk.CTkButton(
+            container,
+            text="Close",
+            height=32,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            border_width=1,
+            border_color="#3f3f46",
+            text_color="#e4e4e7",
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            command=self.destroy,
+        ).pack(fill="x")
+
+    def _copy_to_clipboard(self, text: str, name: str):
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.update()
+            self.copied_badge.configure(text=f"✓ Copied {name} config!")
+            self.after(2500, lambda: self.copied_badge.configure(text=""))
+        except Exception:
+            pass
+
+    def _get_openwebui_snippet(self):
+        return (
+            f"=== Open WebUI Configuration ===\n"
+            f"Go to: Admin Panel -> Settings -> Connections -> OpenAI API\n\n"
+            f"API URL:      http://127.0.0.1:{self.port}/v1\n"
+            f"API Key:      not-needed (or enter any string)\n\n"
+            f"Model ID:     {self.model_name}\n"
+            f"Context Window: Matches your configured Context slider in LLauncher\n"
+        )
+
+    def _get_sillytavern_snippet(self):
+        return (
+            f"=== SillyTavern Configuration ===\n"
+            f"API Selection:   Chat Completion\n"
+            f"API Type:        OpenAI\n"
+            f"Server URL:      http://127.0.0.1:{self.port}/v1\n"
+            f"API Key:         any (e.g. 'llauncher')\n\n"
+            f"Reverse Proxy:   Leave blank\n"
+            f"Model Selection: Click 'Connect' -> select '{self.model_name}'\n"
+        )
+
+    def _get_continue_snippet(self):
+        config_obj = {
+            "models": [
+                {
+                    "title": self.model_name,
+                    "provider": "openai",
+                    "model": self.model_name,
+                    "apiBase": f"http://127.0.0.1:{self.port}/v1",
+                    "apiKey": "any"
+                }
+            ],
+            "tabAutocompleteModel": {
+                "title": f"{self.model_name} (FIM)",
+                "provider": "openai",
+                "model": self.model_name,
+                "apiBase": f"http://127.0.0.1:{self.port}/v1",
+                "apiKey": "any"
+            }
+        }
+        return (
+            f"// ~/.continue/config.json or Cline settings\n"
+            f"{json.dumps(config_obj, indent=2)}\n"
+        )
+
+    def _get_generic_openai_snippet(self):
+        return (
+            f"=== Jan / LM Studio / LibreChat ===\n\n"
+            f"Base URL:     http://127.0.0.1:{self.port}/v1\n"
+            f"API Key:      any / dummy\n"
+            f"Model:        {self.model_name}\n"
+            f"Chat Path:    http://127.0.0.1:{self.port}/v1/chat/completions\n"
+            f"Models Path:  http://127.0.0.1:{self.port}/v1/models\n"
+        )
+
+
+class EndpointTesterDialog(ctk.CTkToplevel):
+    """Modal dialog to test /v1/models and /v1/chat/completions endpoints."""
+
+    def __init__(self, port: str, master=None):
+        super().__init__(master)
+        self.port = port or "8082"
+        self.title("API Endpoint Health Check & Tester")
+        self.geometry("640x510")
+        self.minsize(580, 440)
+        self.configure(fg_color=THEME["modal_bg"])
+        self.transient(master)
+        self.grab_set()
+
+        ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
+        if not os.path.exists(ico_file):
+            ico_file = resource_path("llauncher.ico")
+        if os.path.exists(ico_file):
+            try:
+                self.iconbitmap(ico_file)
+            except Exception:
+                pass
+
+        apply_mica_style(self)
+
+        if master:
+            try:
+                self.update_idletasks()
+                m_x = master.winfo_x()
+                m_y = master.winfo_y()
+                m_w = master.winfo_width()
+                m_h = master.winfo_height()
+                d_w, d_h = 640, 510
+                pos_x = max(0, m_x + (m_w - d_w) // 2)
+                pos_y = max(0, m_y + (m_h - d_h) // 2)
+                self.geometry(f"{d_w}x{d_h}+{pos_x}+{pos_y}")
+            except Exception:
+                pass
+
+        self._build_ui()
+        # Automatically run test on open
+        self.after(200, self._test_models_endpoint)
+
+    def _build_ui(self):
+        container = ctk.CTkFrame(self, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=16, pady=16)
+
+        top_frame = ctk.CTkFrame(container, fg_color="transparent")
+        top_frame.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(
+            top_frame,
+            text=f"API Tester (http://127.0.0.1:{self.port})",
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(side="left")
+
+        self.status_pill = ctk.CTkLabel(
+            top_frame,
+            text="● TESTING...",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color=THEME["text_muted"],
+        )
+        self.status_pill.pack(side="right")
+
+        # Action Buttons Row
+        btn_row = ctk.CTkFrame(container, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(0, 8))
+
+        self.test_models_btn = ctk.CTkButton(
+            btn_row,
+            text="🔍  Ping /v1/models",
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self._test_models_endpoint,
+        )
+        self.test_models_btn.pack(side="left", padx=(0, 8))
+
+        self.test_chat_btn = ctk.CTkButton(
+            btn_row,
+            text="💬  Test /v1/chat/completions",
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self._test_chat_endpoint,
+        )
+        self.test_chat_btn.pack(side="left")
+
+        # Response Output Box
+        self.log_box = ctk.CTkTextbox(
+            container,
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_primary"],
+            font=ctk.CTkFont(family="Consolas", size=11),
+            corner_radius=6,
+        )
+        self.log_box.pack(fill="both", expand=True, pady=(0, 10))
+
+        # Bottom close button
+        ctk.CTkButton(
+            container,
+            text="Close",
+            height=32,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            border_width=1,
+            border_color="#3f3f46",
+            text_color="#e4e4e7",
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            command=self.destroy,
+        ).pack(fill="x")
+
+    def _append_log(self, text: str):
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", text + "\n")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    def _clear_log(self):
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+
+    def _test_models_endpoint(self):
+        self._clear_log()
+        self.status_pill.configure(text="● QUERYING /v1/models...", text_color="#facc15")
+        self._append_log(f"GET http://127.0.0.1:{self.port}/v1/models ...\n")
+
+        def worker():
+            url = f"http://127.0.0.1:{self.port}/v1/models"
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "LLauncher"})
+                with urllib.request.urlopen(req, timeout=3.0) as resp:
+                    status = resp.status
+                    data = resp.read().decode("utf-8")
+                    parsed = json.loads(data)
+                    formatted = json.dumps(parsed, indent=2)
+                    self.after(0, lambda: self._on_test_success(f"HTTP {status} OK\n\n{formatted}"))
+            except Exception as e:
+                err_msg = str(e)
+                self.after(0, lambda: self._on_test_failure(f"Connection Failed: {err_msg}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _test_chat_endpoint(self):
+        self._clear_log()
+        self.status_pill.configure(text="● QUERYING /v1/chat/completions...", text_color="#facc15")
+        self._append_log(f"POST http://127.0.0.1:{self.port}/v1/chat/completions ...\nPrompt: 'Ping!'\n")
+
+        def worker():
+            url = f"http://127.0.0.1:{self.port}/v1/chat/completions"
+            payload = json.dumps({
+                "messages": [{"role": "user", "content": "Ping! Reply with 'Pong!'"}],
+                "max_tokens": 16,
+                "temperature": 0.1
+            }).encode("utf-8")
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=payload,
+                    headers={"Content-Type": "application/json", "User-Agent": "LLauncher"}
+                )
+                with urllib.request.urlopen(req, timeout=6.0) as resp:
+                    status = resp.status
+                    data = resp.read().decode("utf-8")
+                    parsed = json.loads(data)
+                    formatted = json.dumps(parsed, indent=2)
+                    self.after(0, lambda: self._on_test_success(f"HTTP {status} OK\n\n{formatted}"))
+            except Exception as e:
+                err_msg = str(e)
+                self.after(0, lambda: self._on_test_failure(f"Chat Completion Failed: {err_msg}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_test_success(self, text: str):
+        self.status_pill.configure(text="● ONLINE / RESPONSIVE", text_color="#4ade80")
+        self._append_log(text)
+
+    def _on_test_failure(self, text: str):
+        self.status_pill.configure(text="● OFFLINE / NO RESPONSE", text_color="#f87171")
+        self._append_log(text)
+        self._append_log("\nEnsure the llama-server is currently running in LLauncher.")
+
+
 class LlamaLauncher(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.withdraw()  # Off-screen construction eliminates launch stutter and flicker
         self.title("LLauncher - llama.cpp Server Launcher")
-        self.geometry("1184x595")
-        self.minsize(1120, 540)
+        self.geometry("1184x625")
+        self.minsize(1120, 560)
         self.resizable(True, True)
         self.configure(fg_color="black")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1558,8 +1965,16 @@ class LlamaLauncher(ctk.CTk):
 
     def _build_launch_action(self):
         self.server_proc = None
+
+        action_row = ctk.CTkFrame(self.main_container, fg_color="transparent")
+        action_row.pack(fill="x", padx=2, pady=(2, 0))
+        action_row.columnconfigure(0, weight=4)
+        action_row.columnconfigure(1, weight=1)
+        action_row.columnconfigure(2, weight=1)
+        action_row.columnconfigure(3, weight=1)
+
         self.start_btn = ctk.CTkButton(
-            self.main_container,
+            action_row,
             text="🚀  Start Model Server",
             height=42,
             fg_color=THEME["primary_btn_bg"],
@@ -1571,7 +1986,74 @@ class LlamaLauncher(ctk.CTk):
             corner_radius=8,
             command=self.toggle_server,
         )
-        self.start_btn.pack(fill="x", padx=2, pady=(2, 0))
+        self.start_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        self.open_webui_btn = ctk.CTkButton(
+            action_row,
+            text="🌐  Open Web UI",
+            height=42,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            border_width=1,
+            border_color="#3f3f46",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=THEME["text_muted"],
+            corner_radius=8,
+            command=self.open_web_ui,
+            state="disabled",
+        )
+        self.open_webui_btn.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+
+        self.client_configs_btn = ctk.CTkButton(
+            action_row,
+            text="⚙️  Client Configs",
+            height=42,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=8,
+            command=self.open_client_configs,
+        )
+        self.client_configs_btn.grid(row=0, column=2, sticky="ew", padx=(0, 6))
+
+        self.api_tester_btn = ctk.CTkButton(
+            action_row,
+            text="🔍  API Tester",
+            height=42,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=8,
+            command=self.open_api_tester,
+        )
+        self.api_tester_btn.grid(row=0, column=3, sticky="ew")
+
+    def open_web_ui(self):
+        """Open local llama-server web UI in the default browser."""
+        port = self.port_entry.get().strip() if hasattr(self, "port_entry") else "8082"
+        url = f"http://127.0.0.1:{port}"
+        try:
+            webbrowser.open(url)
+            self._flash_badge(f"● OPENED BROWSER: PORT {port}")
+        except Exception as e:
+            self._flash_badge(f"⚠ FAILED TO OPEN BROWSER: {e}", is_alert=True)
+
+    def open_client_configs(self):
+        """Open the Client & Frontend Integrations configuration dialog."""
+        port = self.port_entry.get().strip() if hasattr(self, "port_entry") else "8082"
+        model_path = self.model_entry.get().strip() if hasattr(self, "model_entry") else ""
+        ClientConfigDialog(port=port, model_path=model_path, master=self)
+
+    def open_api_tester(self):
+        """Open the API Endpoint Tester & Health Check dialog."""
+        port = self.port_entry.get().strip() if hasattr(self, "port_entry") else "8082"
+        EndpointTesterDialog(port=port, master=self)
 
     def browse_exe(self):
         f = filedialog.askopenfilename(
@@ -1710,6 +2192,14 @@ class LlamaLauncher(ctk.CTk):
             border_color="#dc2626",
             text_color="#ffffff",
         )
+        if hasattr(self, "open_webui_btn"):
+            self.open_webui_btn.configure(
+                state="normal",
+                fg_color=THEME["secondary_btn_bg"],
+                hover_color=THEME["secondary_btn_hover"],
+                border_color=THEME["secondary_btn_border"],
+                text_color=THEME["secondary_btn_text"],
+            )
         self._flash_badge("● SERVER RUNNING")
         self.after(500, self._poll_server_status)
 
@@ -1743,6 +2233,14 @@ class LlamaLauncher(ctk.CTk):
             border_color=THEME["primary_btn_border"],
             text_color=THEME["primary_btn_text"],
         )
+        if hasattr(self, "open_webui_btn"):
+            self.open_webui_btn.configure(
+                state="disabled",
+                fg_color="#18181b",
+                hover_color="#27272a",
+                border_color="#3f3f46",
+                text_color=THEME["text_muted"],
+            )
 
     def _poll_server_status(self):
         """Check if server process is still alive and reset button when it terminates."""

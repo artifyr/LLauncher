@@ -53,6 +53,11 @@ It includes dedicated hardware optimizations tuned for modern high-VRAM GPUs, sp
 - **Multimodal Vision Model Support (`--mmproj`)**:
   - Vision toggle reveals dedicated projector weights path and automatically injects `--mmproj` arguments into the launch command.
 
+- **Frontend & Client Integrations**:
+  - **"Open Web UI" Quick Launcher**: One-click button (`🌐 Open Web UI`) automatically enabled when the server is online to launch the local web interface (`http://127.0.0.1:<port>`) in your default browser.
+  - **One-Click Client Configurations**: Pre-formatted snippets and instant copy-paste setup configs for OpenAI-compatible frontends, including **Open WebUI**, **SillyTavern**, **Continue / Cline** (VS Code / JetBrains), and **Jan / LM Studio / LibreChat**.
+  - **API Endpoint Tester & Health Check**: Built-in ping and diagnostic tool to test `/v1/models` and `/v1/chat/completions` directly inside LLauncher to verify server status, responsiveness, and inference latency.
+
 - **Live Server Lifecycle & Process Management**:
   - Dual-state Start / Stop action button with real-time status polling.
   - Switches to a crimson danger button (`🛑 Stop Model Server`) once online.
