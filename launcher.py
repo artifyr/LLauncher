@@ -237,10 +237,11 @@ class LlamaLauncher(ctk.CTk):
         super().__init__()
         self.withdraw()  # Off-screen construction eliminates launch stutter and flicker
         self.title("LLauncher - llama.cpp Server Launcher")
-        self.geometry("1184x565")
-        self.minsize(1120, 530)
+        self.geometry("1184x595")
+        self.minsize(1120, 540)
         self.resizable(True, True)
         self.configure(fg_color="black")
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Window Icon
         ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
@@ -505,6 +506,8 @@ class LlamaLauncher(ctk.CTk):
         p["minp"] = self.minp_entry.get().strip()
         p["fa"] = self.fa_var.get()
         p["jinja"] = self.jinja_var.get()
+        p["vision"] = self.vision_var.get() if hasattr(self, "vision_var") else False
+        p["mmproj"] = self.mmproj_entry.get().strip() if hasattr(self, "mmproj_entry") else ""
 
         p["opts"] = {}
         for k in self.opt_vars:
@@ -578,6 +581,15 @@ class LlamaLauncher(ctk.CTk):
         self.fa_var.set(profile.get("fa", True))
         self.jinja_var.set(profile.get("jinja", True))
 
+        if hasattr(self, "vision_var"):
+            self.vision_var.set(profile.get("vision", False))
+            if hasattr(self, "mmproj_entry") and "mmproj" in profile:
+                val = profile.get("mmproj", r"D:\HF Models\mmproj-f16.gguf")
+                if val:
+                    self.mmproj_entry.delete(0, "end")
+                    self.mmproj_entry.insert(0, val)
+            self._toggle_vision()
+
         opts = profile.get("opts", {})
         for k in self.opt_vars:
             opt_cfg = opts.get(k, {})
@@ -636,15 +648,37 @@ class LlamaLauncher(ctk.CTk):
         )
         self.browse_exe_btn.grid(row=0, column=2, sticky="e", padx=(0, 12), pady=(8, 4))
 
-        # Row 1: Model GGUF
+        # Row 1: Model GGUF + Vision Checkbox
+        model_lbl_frame = ctk.CTkFrame(card, fg_color="transparent")
+        model_lbl_frame.grid(row=1, column=0, sticky="w", padx=(12, 4), pady=(0, 6))
+
         ctk.CTkLabel(
-            card,
+            model_lbl_frame,
             text="Model GGUF",
             font=self.font_label,
             text_color=THEME["text_secondary"],
-            width=115,
             anchor="w",
-        ).grid(row=1, column=0, sticky="w", padx=(12, 4), pady=(0, 8))
+        ).pack(side="left")
+
+        self.vision_var = ctk.BooleanVar(value=False)
+        self.vision_chk = ctk.CTkCheckBox(
+            model_lbl_frame,
+            text="Vision",
+            variable=self.vision_var,
+            command=self._toggle_vision,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["cyan_badge"],
+            fg_color=THEME["accent_red"],
+            hover_color=THEME["accent_hover"],
+            border_color=THEME["secondary_btn_border"],
+            border_width=2,
+            corner_radius=4,
+            height=18,
+            width=18,
+            checkbox_width=16,
+            checkbox_height=16,
+        )
+        self.vision_chk.pack(side="left", padx=(10, 0))
 
         self.model_entry = ctk.CTkEntry(
             card,
@@ -658,7 +692,7 @@ class LlamaLauncher(ctk.CTk):
             height=30,
             font=self.font_sm,
         )
-        self.model_entry.grid(row=1, column=1, sticky="ew", padx=(4, 8), pady=(0, 8))
+        self.model_entry.grid(row=1, column=1, sticky="ew", padx=(4, 8), pady=(0, 6))
 
         self.browse_btn = ctk.CTkButton(
             card,
@@ -674,7 +708,67 @@ class LlamaLauncher(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=12),
             command=self.browse_model,
         )
-        self.browse_btn.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 8))
+        self.browse_btn.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 6))
+
+        # Row 2: Vision mmproj (Conditionally displayed when Vision checkbox is checked)
+        self.mmproj_label = ctk.CTkLabel(
+            card,
+            text="Vision mmproj",
+            font=self.font_label,
+            text_color=THEME["cyan_badge"],
+            width=115,
+            anchor="w",
+        )
+
+        self.mmproj_entry = ctk.CTkEntry(
+            card,
+            placeholder_text=r"D:\HF Models\mmproj-f16.gguf",
+            placeholder_text_color=THEME["text_muted"],
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_primary"],
+            corner_radius=6,
+            height=30,
+            font=self.font_sm,
+        )
+        self.mmproj_entry.insert(0, r"D:\HF Models\mmproj-f16.gguf")
+
+        self.mmproj_browse_btn = ctk.CTkButton(
+            card,
+            text="Browse",
+            width=85,
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["text_primary"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            command=self.browse_mmproj,
+        )
+
+    def _toggle_vision(self):
+        """Show or hide mmproj row below GGUF selector based on Vision checkbox."""
+        if hasattr(self, "mmproj_label") and hasattr(self, "vision_var"):
+            if self.vision_var.get():
+                self.mmproj_label.grid(row=2, column=0, sticky="w", padx=(12, 4), pady=(0, 8))
+                self.mmproj_entry.grid(row=2, column=1, sticky="ew", padx=(4, 8), pady=(0, 8))
+                self.mmproj_browse_btn.grid(row=2, column=2, sticky="e", padx=(0, 12), pady=(0, 8))
+            else:
+                self.mmproj_label.grid_remove()
+                self.mmproj_entry.grid_remove()
+                self.mmproj_browse_btn.grid_remove()
+
+    def browse_mmproj(self):
+        f = filedialog.askopenfilename(
+            filetypes=[("GGUF Files", "*.gguf"), ("All Files", "*.*")],
+            title="Select Vision mmproj (.gguf)"
+        )
+        if f:
+            self.mmproj_entry.delete(0, "end")
+            self.mmproj_entry.insert(0, f)
 
     def _detect_devices(self, on_done=None):
         """Detect GPU devices asynchronously via llama-server --list-devices to prevent launch lag."""
@@ -1302,6 +1396,7 @@ class LlamaLauncher(ctk.CTk):
             widget.configure(state="disabled")
 
     def _build_launch_action(self):
+        self.server_proc = None
         self.start_btn = ctk.CTkButton(
             self.main_container,
             text="🚀  Start Model Server",
@@ -1313,7 +1408,7 @@ class LlamaLauncher(ctk.CTk):
             font=self.font_btn,
             text_color=THEME["text_primary"],
             corner_radius=8,
-            command=self.launch,
+            command=self.toggle_server,
         )
         self.start_btn.pack(fill="x", padx=2, pady=(2, 0))
 
@@ -1333,11 +1428,34 @@ class LlamaLauncher(ctk.CTk):
             self.model_entry.delete(0, "end")
             self.model_entry.insert(0, f)
 
+    def toggle_server(self):
+        """Toggle server between running and stopped."""
+        if self.server_proc is not None and self.server_proc.poll() is None:
+            self.stop_server()
+        else:
+            self.start_server()
+
     def launch(self):
+        """Backwards-compatible alias for start_server."""
+        self.start_server()
+
+    def start_server(self):
         exe = self.exe_entry.get().strip()
         model = self.model_entry.get().strip()
         if not model:
+            self._flash_badge("⚠ SELECT MODEL GGUF", is_alert=True)
             return
+
+        if not os.path.exists(exe):
+            self._flash_badge("⚠ INVALID LLAMA-SERVER PATH", is_alert=True)
+            return
+
+        # Vision Model mmproj validation
+        if self.vision_var.get():
+            mmproj = self.mmproj_entry.get().strip()
+            if not mmproj:
+                self._flash_badge("⚠ SELECT MMPROJ GGUF", is_alert=True)
+                return
 
         # Resolve selected device argument (e.g. "Vulkan0")
         selected_device_display = self.device_dropdown.get()
@@ -1352,6 +1470,15 @@ class LlamaLauncher(ctk.CTk):
         cmd = [
             exe,
             "-m", model,
+        ]
+
+        # Vision Model: Pass mmproj tag if enabled
+        if self.vision_var.get():
+            mmproj = self.mmproj_entry.get().strip()
+            if mmproj:
+                cmd.extend(["--mmproj", mmproj])
+
+        cmd.extend([
             "--device", device_id,
             "-ngl", gpu_layers,
             "-c", ctx_tokens,
@@ -1365,7 +1492,7 @@ class LlamaLauncher(ctk.CTk):
             "--temp", self.temp_entry.get().strip(),
             "--top-p", self.topp_entry.get().strip(),
             "--min-p", self.minp_entry.get().strip(),
-        ]
+        ])
 
         if self.fa_var.get():
             cmd.extend(["-fa", "on"])
@@ -1392,9 +1519,82 @@ class LlamaLauncher(ctk.CTk):
             val = self.opt_str_vars["cache_ram"].get().strip() or "8192"
             cmd.extend(["--cache-ram", val])
 
-        # Launch in a new cmd window with Vulkan memory fix
-        env_cmd = "set GGML_VK_DISABLE_PINNED=1 && " + subprocess.list2cmdline(cmd)
-        subprocess.Popen(f'start cmd /k "{env_cmd}"', shell=True)
+        # Launch in a dedicated console window with Vulkan memory fix
+        env = os.environ.copy()
+        env["GGML_VK_DISABLE_PINNED"] = "1"
+        try:
+            self.server_proc = subprocess.Popen(
+                ["cmd.exe", "/k", subprocess.list2cmdline(cmd)],
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                env=env,
+            )
+        except Exception as e:
+            self._flash_badge(f"⚠ FAILED TO LAUNCH: {e}", is_alert=True)
+            return
+
+        # Update button to Stop Model Server state
+        self.start_btn.configure(
+            text="🛑  Stop Model Server",
+            fg_color="#7f1d1d",
+            hover_color="#991b1b",
+            border_color="#dc2626",
+        )
+        self._flash_badge("● SERVER RUNNING")
+        self.after(500, self._poll_server_status)
+
+    def stop_server(self):
+        """Cleanly terminate running llama-server process and console window."""
+        if self.server_proc is not None:
+            try:
+                no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                subprocess.run(
+                    f"taskkill /F /T /PID {self.server_proc.pid}",
+                    shell=True,
+                    creationflags=no_window,
+                )
+            except Exception:
+                pass
+            try:
+                self.server_proc.kill()
+            except Exception:
+                pass
+            self.server_proc = None
+
+        self._reset_server_btn_ui()
+        self._flash_badge("● SERVER STOPPED")
+
+    def _reset_server_btn_ui(self):
+        """Reset launch button styling back to start state."""
+        self.start_btn.configure(
+            text="🚀  Start Model Server",
+            fg_color=THEME["accent_blue"],
+            hover_color=THEME["accent_hover"],
+            border_color=THEME["accent_glow"],
+        )
+
+    def _poll_server_status(self):
+        """Check if server process is still alive and reset button when it terminates."""
+        if self.server_proc is not None:
+            if self.server_proc.poll() is not None:
+                self.server_proc = None
+                self._reset_server_btn_ui()
+                self._flash_badge("● SERVER OFFLINE")
+            else:
+                self.after(500, self._poll_server_status)
+
+    def _on_close(self):
+        """Clean up background server before closing application."""
+        if self.server_proc is not None and self.server_proc.poll() is None:
+            try:
+                no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                subprocess.run(
+                    f"taskkill /F /T /PID {self.server_proc.pid}",
+                    shell=True,
+                    creationflags=no_window,
+                )
+            except Exception:
+                pass
+        self.destroy()
 
 
 if __name__ == "__main__":

@@ -34,6 +34,8 @@ It includes dedicated hardware optimizations tuned for modern high-VRAM GPUs, sp
   - KV Cache Reuse (`--cache-reuse`): Reuses pre-computed prefix tokens across multi-turn chats.
   - Dedicated Server Slot (`-np 1`): Allocates full GPU resources to single-session inference.
   - RAM Cache Allocation (`--cache-ram`): Utilizes excess system RAM for context cache overflow.
+- Vision Projector Support (`--mmproj`): Integrated Vision checkbox dynamically reveals mmproj weights picker and automatically attaches `--mmproj` for multimodal/vision inference.
+- Live Server Lifecycle Management: One-click Start / Stop server toggle button with live process health tracking and clean process tree termination.
 - Vulkan Memory Stability: Automatically prepends `GGML_VK_DISABLE_PINNED=1` to prevent driver allocation faults on AMD hardware.
 
 ---
