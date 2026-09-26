@@ -141,21 +141,34 @@ The resulting executable is generated at `dist/LLauncher.exe`.
 
 ---
 
-## Universal VRAM Profiles (Manual Import)
+## Hardware Profiles (Manual Import)
 
-LLauncher includes pre-configured, optimized profile scripts located in the `profiles/` folder. These profiles are designed for hardware compatibility across common VRAM capacities and are **imported manually** (not loaded by default). MoE layer offloading (`--n-cpu-moe`) is disabled in these profiles by default for universal compatibility across dense and MoE models.
+LLauncher includes pre-configured, optimized profile scripts located in the `profiles/` folder, divided into `general/` (dense models with MoE off) and `MoE/` (MoE-specific models with expert offloading and CPU workers). These profiles are **imported manually** (not loaded by default).
 
 To import a profile:
 1. In LLauncher, click **Import .ps1** in the footer.
-2. Navigate to `profiles/` and select the profile matching your GPU VRAM:
+2. Navigate to `profiles/general/` or `profiles/MoE/` and select the profile matching your hardware:
+
+### General Profiles (`profiles/general/`)
+Universal profiles for dense LLMs (Llama 3, Mistral, Qwen 2.5, Gemma 2, Phi, etc.). MoE CPU offloading is disabled for universal stability.
 
 | Profile Script | Target Hardware | Recommended Context (`-c`) | Batch (`-b` / `-ub`) | Cache Type | Key Optimizations |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `profile_4gb_vram.ps1` | 4 GB VRAM (GTX 1650, RTX 3050 mobile, etc.) | 8,192 tokens | 512 / 128 | `q4_0` | Memory conservative, `--fit-target 256` |
 | `profile_8gb_vram.ps1` | 8 GB VRAM (RTX 3070, 4060, RX 6600, etc.) | 16,384 tokens | 512 / 256 | `q4_0` | `-ngl 99`, `--fit-target 512` |
 | `profile_12gb_vram.ps1` | 12 GB VRAM (RTX 3060 12GB, 4070, RX 6700 XT) | 32,768 tokens | 1024 / 256 | `q8_0` | High throughput, `q8_0` KV, `--fit-target 768` |
-| `profile_16gb_vram.ps1` | 16 GB VRAM (RTX 4080, RX 7800 XT, etc.) | 65,536 tokens | 1024 / 256 | `q8_0` | Extended context, high batch throughput |
+| `profile_16gb_vram.ps1` | 16 GB VRAM (RTX 4080, RX 7800 XT, 9070 XT) | 65,536 tokens | 1024 / 256 | `q8_0` | Extended context, high batch throughput |
 | `profile_24gb_vram.ps1` | 24 GB+ VRAM (RTX 3090, RTX 4090, Workstations) | 131,072 tokens | 2048 / 512 | `q8_0` | Maximum context, `mlock`, RAM cache reservation |
+
+### MoE Profiles (`profiles/MoE/`)
+Tailored for Mixture-of-Experts architectures (Mixtral 8x7B, Mixtral 8x22B, Qwen MoE, DeepSeek MoE, DBRX). Offloads active attention layers to GPU while delegating 16 expert layers to CPU via `--n-cpu-moe 16`.
+
+| Profile Script | Target Hardware | Recommended Context (`-c`) | Batch (`-b` / `-ub`) | Cache Type | Key Optimizations |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `profile_12gb_vram.ps1` | 12 GB VRAM (RTX 3060 12GB, 4070, RX 6700 XT) | 16,384 tokens | 512 / 128 | `q4_0` | Hybrid offload (`-ngl 28`), `--n-cpu-moe 16`, 8GB RAM cache |
+| `profile_16gb_vram.ps1` | 16 GB VRAM (RTX 4080, RX 7800 XT, 9070 XT) | 32,768 tokens | 1024 / 256 | `q8_0` | Accelerated offload (`-ngl 33`), `--n-cpu-moe 16`, prompt threads `-tb 8` |
+| `profile_24gb_vram.ps1` | 24 GB VRAM (RTX 3090, RTX 4090, RX 7900 XTX) | 32,768 tokens | 1024 / 256 | `q8_0` | Full layer offload (`-ngl 99`), `mlock`, 16GB RAM cache, `--n-cpu-moe 16` |
+| `profile_32gb_vram.ps1` | 32 GB+ VRAM (RTX 5090, RTX 6000 Ada, Multi-GPU) | 65,536 tokens | 2048 / 512 | `q8_0` | 64K context, 2048 batch, `mlock`, `--fit-target 1536`, `--n-cpu-moe 16` |
 
 *Note: You can also execute these `.ps1` files directly in PowerShell to launch your llama-server headlessly.*
 
@@ -170,12 +183,18 @@ LLauncher/
 |   \-- llauncher.ico      # Application and tray icon
 |-- dist/
 |   \-- LLauncher.exe      # Compiled standalone Windows executable
-|-- profiles/              # Universal VRAM hardware preset scripts (manual import)
-|   |-- profile_4gb_vram.ps1
-|   |-- profile_8gb_vram.ps1
-|   |-- profile_12gb_vram.ps1
-|   |-- profile_16gb_vram.ps1
-|   \-- profile_24gb_vram.ps1
+|-- profiles/              # Hardware preset scripts (manual import)
+|   |-- general/           # Dense LLM profiles (MoE disabled)
+|   |   |-- profile_4gb_vram.ps1
+|   |   |-- profile_8gb_vram.ps1
+|   |   |-- profile_12gb_vram.ps1
+|   |   |-- profile_16gb_vram.ps1
+|   |   \-- profile_24gb_vram.ps1
+|   \-- MoE/               # Mixture-of-Experts profiles (--n-cpu-moe 16)
+|       |-- profile_12gb_vram.ps1
+|       |-- profile_16gb_vram.ps1
+|       |-- profile_24gb_vram.ps1
+|       \-- profile_32gb_vram.ps1
 |-- launcher.py            # Main application source code
 |-- Llauncher.spec         # PyInstaller build specification
 |-- profiles.json          # Persistent profiles configuration
