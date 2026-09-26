@@ -103,6 +103,7 @@ KV_CACHE_TYPES = ["q8_0", "q4_0", "q4_1", "f16"]
 
 # Path to persistent profiles configuration
 PROFILES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles.json")
+RECENT_MODELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recent_models.json")
 
 DEFAULT_PROFILES = [
     {
@@ -310,6 +311,9 @@ class LlamaLauncher(ctk.CTk):
         self.active_profile_idx = 0
         self._load_profiles()
 
+        self.recent_models = []
+        self._load_recent_models()
+
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.pack(fill="both", expand=True, padx=16, pady=10)
 
@@ -359,6 +363,119 @@ class LlamaLauncher(ctk.CTk):
                 json.dump(self.profiles, f, indent=2)
         except Exception:
             pass
+
+    def _load_recent_models(self):
+        """Load recent model paths from recent_models.json."""
+        self.recent_models = []
+        if os.path.exists(RECENT_MODELS_FILE):
+            try:
+                with open(RECENT_MODELS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.recent_models = [m for m in data if isinstance(m, str) and m.strip()]
+            except Exception:
+                pass
+
+    def _persist_recent_models(self):
+        """Save recent model paths to recent_models.json."""
+        try:
+            with open(RECENT_MODELS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.recent_models, f, indent=2)
+        except Exception:
+            pass
+
+    def _add_recent_model(self, model_path: str):
+        """Add model path to recent history and refresh UI dropdown."""
+        if not model_path or not model_path.strip():
+            return
+        norm_path = os.path.normpath(model_path.strip())
+        if norm_path in self.recent_models:
+            self.recent_models.remove(norm_path)
+        self.recent_models.insert(0, norm_path)
+        self.recent_models = self.recent_models[:15]
+        self._persist_recent_models()
+        self._refresh_recent_models_menu()
+
+    def _refresh_recent_models_menu(self):
+        """Update recent models dropdown menu values."""
+        if not hasattr(self, "recent_models_menu"):
+            return
+        options = ["Recent Models..."]
+        for p in self.recent_models:
+            options.append(os.path.basename(p))
+        if len(self.recent_models) > 0:
+            options.append("Clear History")
+        self.recent_models_menu.configure(values=options)
+        self.recent_models_menu.set("Recent Models...")
+
+    def _on_recent_model_selected(self, choice: str):
+        """Handle selection from recent models dropdown."""
+        if choice == "Recent Models...":
+            return
+        if choice == "Clear History":
+            self.recent_models = []
+            self._persist_recent_models()
+            self._refresh_recent_models_menu()
+            self._flash_badge("● HISTORY CLEARED")
+            return
+
+        # Find matching path by filename
+        matched_path = None
+        for p in self.recent_models:
+            if os.path.basename(p) == choice:
+                matched_path = p
+                break
+
+        if matched_path:
+            self.model_entry.delete(0, "end")
+            self.model_entry.insert(0, matched_path)
+            self._add_recent_model(matched_path)
+            self._auto_detect_vision_mmproj(matched_path)
+
+    def _auto_detect_vision_mmproj(self, model_path: str):
+        """Auto-detect matching vision mmproj in model directory if model is vision-capable."""
+        if not model_path:
+            return
+        clean_path = os.path.normpath(model_path)
+        filename = os.path.basename(clean_path).lower()
+
+        vision_keywords = [
+            "vision", "-vl", "_vl", "llava", "minicpm", "ovis", "internvl",
+            "pixtral", "cogvlm", "florence", "mplug", "points", "glvm"
+        ]
+        is_vision_model = any(kw in filename for kw in vision_keywords)
+
+        model_dir = os.path.dirname(clean_path)
+        if not os.path.isdir(model_dir):
+            return
+
+        # Search directory for mmproj files
+        candidates = []
+        try:
+            for item in os.listdir(model_dir):
+                if item.lower().endswith(".gguf") and "mmproj" in item.lower():
+                    candidates.append(os.path.normpath(os.path.join(model_dir, item)))
+        except Exception:
+            return
+
+        if not candidates:
+            return
+
+        # Sort candidate to pick best match (e.g., matching f16 or similar prefix)
+        best_match = candidates[0]
+        for c in candidates:
+            c_name = os.path.basename(c).lower()
+            if "f16" in c_name:
+                best_match = c
+                break
+
+        # If vision model keywords detected or mmproj directly in directory
+        if is_vision_model:
+            self.vision_var.set(True)
+            self.mmproj_entry.delete(0, "end")
+            self.mmproj_entry.insert(0, best_match)
+            self._toggle_vision()
+            self._flash_badge(f"● AUTO-DETECTED MMPROJ: {os.path.basename(best_match)[:22]}")
 
     def _build_header(self):
         header = ctk.CTkFrame(self.main_container, fg_color="transparent")
@@ -702,8 +819,13 @@ class LlamaLauncher(ctk.CTk):
         )
         self.vision_chk.pack(side="left", padx=(10, 0))
 
+        # Model input container: Entry + Recent Models Dropdown
+        model_input_frame = ctk.CTkFrame(card, fg_color="transparent")
+        model_input_frame.grid(row=1, column=1, sticky="ew", padx=(4, 8), pady=(0, 6))
+        model_input_frame.columnconfigure(0, weight=1)
+
         self.model_entry = ctk.CTkEntry(
-            card,
+            model_input_frame,
             placeholder_text="Path to .gguf weights file",
             placeholder_text_color=THEME["text_muted"],
             fg_color=THEME["input_bg"],
@@ -714,7 +836,32 @@ class LlamaLauncher(ctk.CTk):
             height=30,
             font=self.font_sm,
         )
-        self.model_entry.grid(row=1, column=1, sticky="ew", padx=(4, 8), pady=(0, 6))
+        self.model_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        initial_history_values = ["Recent Models..."]
+        for p in self.recent_models:
+            initial_history_values.append(os.path.basename(p))
+        if len(self.recent_models) > 0:
+            initial_history_values.append("Clear History")
+
+        self.recent_models_menu = ctk.CTkOptionMenu(
+            model_input_frame,
+            values=initial_history_values,
+            command=self._on_recent_model_selected,
+            fg_color=THEME["input_bg"],
+            button_color="#27272a",
+            button_hover_color="#3f3f46",
+            text_color=THEME["text_secondary"],
+            dropdown_fg_color=THEME["dropdown_bg"],
+            dropdown_text_color=THEME["text_primary"],
+            dropdown_hover_color="#27272a",
+            corner_radius=6,
+            height=30,
+            width=140,
+            font=self.font_sm,
+        )
+        self.recent_models_menu.set("Recent Models...")
+        self.recent_models_menu.grid(row=0, column=1, sticky="e")
 
         self.browse_btn = ctk.CTkButton(
             card,
@@ -1439,8 +1586,11 @@ class LlamaLauncher(ctk.CTk):
     def browse_model(self):
         f = filedialog.askopenfilename(filetypes=[("GGUF Files", "*.gguf")])
         if f:
+            norm_path = os.path.normpath(f)
             self.model_entry.delete(0, "end")
-            self.model_entry.insert(0, os.path.normpath(f))
+            self.model_entry.insert(0, norm_path)
+            self._add_recent_model(norm_path)
+            self._auto_detect_vision_mmproj(norm_path)
 
     def toggle_server(self):
         """Toggle server between running and stopped."""
@@ -1466,6 +1616,8 @@ class LlamaLauncher(ctk.CTk):
         if not os.path.exists(exe):
             self._flash_badge("⚠ INVALID LLAMA-SERVER PATH", is_alert=True)
             return
+
+        self._add_recent_model(model)
 
         # Vision Model mmproj validation
         mmproj = ""
