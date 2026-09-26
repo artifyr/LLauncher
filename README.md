@@ -141,6 +141,26 @@ The resulting executable is generated at `dist/LLauncher.exe`.
 
 ---
 
+## Universal VRAM Profiles (Manual Import)
+
+LLauncher includes pre-configured, optimized profile scripts located in the `profiles/` folder. These profiles are designed for hardware compatibility across common VRAM capacities and are **imported manually** (not loaded by default). MoE layer offloading (`--n-cpu-moe`) is disabled in these profiles by default for universal compatibility across dense and MoE models.
+
+To import a profile:
+1. In LLauncher, click **Import .ps1** in the footer.
+2. Navigate to `profiles/` and select the profile matching your GPU VRAM:
+
+| Profile Script | Target Hardware | Recommended Context (`-c`) | Batch (`-b` / `-ub`) | Cache Type | Key Optimizations |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `profile_4gb_vram.ps1` | 4 GB VRAM (GTX 1650, RTX 3050 mobile, etc.) | 8,192 tokens | 512 / 128 | `q4_0` | Memory conservative, `--fit-target 256` |
+| `profile_8gb_vram.ps1` | 8 GB VRAM (RTX 3070, 4060, RX 6600, etc.) | 16,384 tokens | 512 / 256 | `q4_0` | `-ngl 99`, `--fit-target 512` |
+| `profile_12gb_vram.ps1` | 12 GB VRAM (RTX 3060 12GB, 4070, RX 6700 XT) | 32,768 tokens | 1024 / 256 | `q8_0` | High throughput, `q8_0` KV, `--fit-target 768` |
+| `profile_16gb_vram.ps1` | 16 GB VRAM (RTX 4080, RX 7800 XT, etc.) | 65,536 tokens | 1024 / 256 | `q8_0` | Extended context, high batch throughput |
+| `profile_24gb_vram.ps1` | 24 GB+ VRAM (RTX 3090, RTX 4090, Workstations) | 131,072 tokens | 2048 / 512 | `q8_0` | Maximum context, `mlock`, RAM cache reservation |
+
+*Note: You can also execute these `.ps1` files directly in PowerShell to launch your llama-server headlessly.*
+
+---
+
 ## File Structure
 
 ```
@@ -150,6 +170,12 @@ LLauncher/
 |   \-- llauncher.ico      # Application and tray icon
 |-- dist/
 |   \-- LLauncher.exe      # Compiled standalone Windows executable
+|-- profiles/              # Universal VRAM hardware preset scripts (manual import)
+|   |-- profile_4gb_vram.ps1
+|   |-- profile_8gb_vram.ps1
+|   |-- profile_12gb_vram.ps1
+|   |-- profile_16gb_vram.ps1
+|   \-- profile_24gb_vram.ps1
 |-- launcher.py            # Main application source code
 |-- Llauncher.spec         # PyInstaller build specification
 |-- profiles.json          # Persistent profiles configuration
