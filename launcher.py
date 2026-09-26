@@ -27,30 +27,47 @@ def resource_path(relative_path):
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# Design Tokens (Aero Glass & Deep Space Obsidian with Dark Red Accents)
+# Design Tokens (Slight Dark Tint Aero Glass, Monochrome Black/Gray/White with Maroon Buttons)
 THEME = {
-    "bg": "#060203",
-    "card_bg": "transparent",
-    "card_border": "#280d12",
-    "dropdown_bg": "#140608",
-    "input_bg": "#0a0304",
-    "input_border": "#220b0f",
-    "input_focus": "#990000",
-    "modal_bg": "#100507",
-    "text_primary": "#cbd5e1",
-    "text_secondary": "#64748b",
-    "text_muted": "#475569",
-    "accent_blue": "#8b0000",      # Pure dark red
-    "accent_red": "#8b0000",       # Pure dark red
-    "accent_maroon": "#8b0000",    # Alias
-    "accent_hover": "#5c0000",     # Deep dark red hover
-    "accent_glow": "#990000",      # Pure dark red highlight
-    "cyan_badge": "#dc2626",       # Pure dark red badges & headers (zero pink)
-    "secondary_btn_bg": "#120608",
-    "secondary_btn_hover": "#1e0a0d",
-    "secondary_btn_border": "#2e0f14",
-    "badge_bg": "#150507",
-    "badge_border": "#360a0f",
+    "bg": "#0a0a0c",                  # Deep charcoal black fallback
+    "card_bg": "transparent",         # Translucent glass
+    "card_border": "#27272a",        # Clean zinc-800 border
+    "dropdown_bg": "#18181b",        # Dark zinc dropdown
+    "input_bg": "#121214",           # Charcoal dark input
+    "input_border": "#27272a",       # Zinc border
+    "input_focus": "#800000",        # Subtle maroon focus ring
+    "modal_bg": "#121214",           # Charcoal modal
+    "text_primary": "#ffffff",       # Pure crisp white
+    "text_secondary": "#a1a1aa",     # Zinc-400 clean gray
+    "text_muted": "#71717a",         # Zinc-500 muted gray
+    "cyan_badge": "#ffffff",         # Crisp white headers and slider value badges
+    "badge_bg": "#18181b",           # Zinc badge background
+    "badge_border": "#27272a",       # Zinc badge border
+
+    # Sliders (Neutral Monochrome Black/Gray/White)
+    "slider_knob": "#e4e4e7",        # Crisp light zinc thumb
+    "slider_knob_hover": "#ffffff",  # White on hover
+    "slider_progress": "#71717a",    # Neutral gray progress fill
+    "slider_track": "#18181b",       # Dark zinc background track
+
+    # Checkboxes (Monochrome Black/Gray/White)
+    "checkbox_active": "#52525b",    # Neutral zinc active check
+    "checkbox_hover": "#71717a",     # Subtle hover
+    "checkbox_border": "#3f3f46",    # Zinc border
+
+    # Maroon Buttons
+    "btn_maroon": "#800000",         # Rich classic maroon
+    "btn_maroon_hover": "#5c0000",   # Deep maroon hover
+    "btn_maroon_border": "#991b1b",  # Maroon border accent
+    "accent_blue": "#800000",        # Maroon primary action
+    "accent_red": "#800000",         # Maroon alias
+    "accent_maroon": "#800000",      # Maroon alias
+    "accent_hover": "#5c0000",       # Maroon hover
+    "accent_glow": "#991b1b",        # Maroon glow
+    "secondary_btn_bg": "#800000",   # Maroon buttons (Browse, Save, Rename, Detect)
+    "secondary_btn_hover": "#5c0000",# Maroon button hover
+    "secondary_btn_border": "#991b1b",# Maroon button border
+    "secondary_btn_text": "#ffffff", # Crisp white button text
 }
 
 # Pre-defined step ladders
@@ -167,10 +184,12 @@ class RenameProfileDialog(ctk.CTkInputDialog):
             except Exception:
                 pass
 
-        # Apply dark/aero styling if pywinstyles is available
+        # Apply dark/aero styling with slight dark tint if pywinstyles is available
         if HAS_PYWINSTYLES:
             try:
                 pywinstyles.apply_style(self, style="aero")
+                hwnd = pywinstyles.py_win_style.detect(self)
+                pywinstyles.ChangeDWMAccent(hwnd, 19, 3, color=0xD00a0a0c)
             except Exception:
                 pass
 
@@ -213,8 +232,8 @@ class RenameProfileDialog(ctk.CTkInputDialog):
 
         if hasattr(self, "_ok_button"):
             self._ok_button.configure(
-                fg_color=THEME["accent_red"],
-                hover_color=THEME["accent_hover"],
+                fg_color=THEME["btn_maroon"],
+                hover_color=THEME["btn_maroon_hover"],
                 text_color="#ffffff",
                 corner_radius=6,
                 font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
@@ -222,11 +241,11 @@ class RenameProfileDialog(ctk.CTkInputDialog):
 
         if hasattr(self, "_cancel_button"):
             self._cancel_button.configure(
-                fg_color=THEME["secondary_btn_bg"],
-                hover_color=THEME["secondary_btn_hover"],
+                fg_color="#27272a",
+                hover_color="#3f3f46",
                 border_width=1,
-                border_color=THEME["secondary_btn_border"],
-                text_color=THEME["text_primary"],
+                border_color="#3f3f46",
+                text_color="#e4e4e7",
                 corner_radius=6,
                 font=ctk.CTkFont(family="Segoe UI", size=12),
             )
@@ -310,10 +329,12 @@ class LlamaLauncher(ctk.CTk):
         # Apply initial active profile
         self._apply_profile(self.profiles[self.active_profile_idx])
 
-        # Apply Windows Aero glass styling via pywinstyles & reveal window
+        # Apply Windows Aero glass styling with slight dark tint via pywinstyles & reveal window
         if HAS_PYWINSTYLES:
             try:
                 pywinstyles.apply_style(self, style="aero")
+                hwnd = pywinstyles.py_win_style.detect(self)
+                pywinstyles.ChangeDWMAccent(hwnd, 19, 3, color=0xD00a0a0c)
             except Exception:
                 self.configure(fg_color=THEME["bg"])
 
@@ -423,12 +444,12 @@ class LlamaLauncher(ctk.CTk):
             prof_box,
             values=profile_names,
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            fg_color=THEME["secondary_btn_bg"],
-            selected_color=THEME["accent_maroon"],
-            selected_hover_color=THEME["accent_hover"],
-            unselected_color=THEME["secondary_btn_bg"],
-            unselected_hover_color=THEME["secondary_btn_hover"],
-            text_color=THEME["text_primary"],
+            fg_color="#18181b",
+            selected_color=THEME["btn_maroon"],
+            selected_hover_color=THEME["btn_maroon_hover"],
+            unselected_color="#18181b",
+            unselected_hover_color="#27272a",
+            text_color="#ffffff",
             border_width=1,
             corner_radius=6,
             command=self._on_profile_selected,
@@ -667,10 +688,10 @@ class LlamaLauncher(ctk.CTk):
             variable=self.vision_var,
             command=self._toggle_vision,
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color=THEME["cyan_badge"],
-            fg_color=THEME["accent_red"],
-            hover_color=THEME["accent_hover"],
-            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["text_primary"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
             border_width=2,
             corner_radius=4,
             height=18,
@@ -871,12 +892,12 @@ class LlamaLauncher(ctk.CTk):
             card,
             values=list(self.device_map.keys()),
             fg_color=THEME["input_bg"],
-            button_color=THEME["secondary_btn_bg"],
-            button_hover_color=THEME["secondary_btn_hover"],
+            button_color="#27272a",
+            button_hover_color="#3f3f46",
             text_color=THEME["text_primary"],
             dropdown_fg_color=THEME["dropdown_bg"],
             dropdown_text_color=THEME["text_primary"],
-            dropdown_hover_color=THEME["secondary_btn_hover"],
+            dropdown_hover_color="#27272a",
             corner_radius=6,
             height=28,
             font=self.font_sm,
@@ -898,10 +919,10 @@ class LlamaLauncher(ctk.CTk):
             from_=0,
             to=99,
             number_of_steps=99,
-            button_color=THEME["accent_blue"],
-            button_hover_color=THEME["accent_glow"],
-            progress_color=THEME["accent_blue"],
-            fg_color=THEME["input_bg"],
+            button_color=THEME["slider_knob"],
+            button_hover_color=THEME["slider_knob_hover"],
+            progress_color=THEME["slider_progress"],
+            fg_color=THEME["slider_track"],
             height=16,
             command=self._on_ngl_change,
         )
@@ -932,10 +953,10 @@ class LlamaLauncher(ctk.CTk):
             from_=0,
             to=len(CTX_STEPS) - 1,
             number_of_steps=len(CTX_STEPS) - 1,
-            button_color=THEME["accent_blue"],
-            button_hover_color=THEME["accent_glow"],
-            progress_color=THEME["accent_blue"],
-            fg_color=THEME["input_bg"],
+            button_color=THEME["slider_knob"],
+            button_hover_color=THEME["slider_knob_hover"],
+            progress_color=THEME["slider_progress"],
+            fg_color=THEME["slider_track"],
             height=16,
             command=self._on_ctx_change,
         )
@@ -1062,10 +1083,10 @@ class LlamaLauncher(ctk.CTk):
             from_=0,
             to=len(BATCH_STEPS) - 1,
             number_of_steps=len(BATCH_STEPS) - 1,
-            button_color=THEME["accent_blue"],
-            button_hover_color=THEME["accent_glow"],
-            progress_color=THEME["accent_blue"],
-            fg_color=THEME["input_bg"],
+            button_color=THEME["slider_knob"],
+            button_hover_color=THEME["slider_knob_hover"],
+            progress_color=THEME["slider_progress"],
+            fg_color=THEME["slider_track"],
             height=16,
             command=self._on_batch_change,
         )
@@ -1096,10 +1117,10 @@ class LlamaLauncher(ctk.CTk):
             from_=0,
             to=len(UBATCH_STEPS) - 1,
             number_of_steps=len(UBATCH_STEPS) - 1,
-            button_color=THEME["accent_blue"],
-            button_hover_color=THEME["accent_glow"],
-            progress_color=THEME["accent_blue"],
-            fg_color=THEME["input_bg"],
+            button_color=THEME["slider_knob"],
+            button_hover_color=THEME["slider_knob_hover"],
+            progress_color=THEME["slider_progress"],
+            fg_color=THEME["slider_track"],
             height=16,
             command=self._on_ubatch_change,
         )
@@ -1135,12 +1156,12 @@ class LlamaLauncher(ctk.CTk):
             kv_box,
             values=KV_CACHE_TYPES,
             fg_color=THEME["input_bg"],
-            button_color=THEME["secondary_btn_bg"],
-            button_hover_color=THEME["secondary_btn_hover"],
+            button_color="#27272a",
+            button_hover_color="#3f3f46",
             text_color=THEME["text_primary"],
             dropdown_fg_color=THEME["dropdown_bg"],
             dropdown_text_color=THEME["text_primary"],
-            dropdown_hover_color=THEME["secondary_btn_hover"],
+            dropdown_hover_color="#27272a",
             corner_radius=6,
             height=28,
             font=self.font_sm,
@@ -1161,12 +1182,12 @@ class LlamaLauncher(ctk.CTk):
             kv_box,
             values=KV_CACHE_TYPES,
             fg_color=THEME["input_bg"],
-            button_color=THEME["secondary_btn_bg"],
-            button_hover_color=THEME["secondary_btn_hover"],
+            button_color="#27272a",
+            button_hover_color="#3f3f46",
             text_color=THEME["text_primary"],
             dropdown_fg_color=THEME["dropdown_bg"],
             dropdown_text_color=THEME["text_primary"],
-            dropdown_hover_color=THEME["secondary_btn_hover"],
+            dropdown_hover_color="#27272a",
             corner_radius=6,
             height=28,
             font=self.font_sm,
@@ -1257,9 +1278,9 @@ class LlamaLauncher(ctk.CTk):
             variable=self.fa_var,
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color=THEME["text_primary"],
-            fg_color=THEME["accent_blue"],
-            hover_color=THEME["accent_hover"],
-            border_color=THEME["secondary_btn_border"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
             border_width=2,
             corner_radius=4,
             height=22,
@@ -1271,9 +1292,9 @@ class LlamaLauncher(ctk.CTk):
             variable=self.jinja_var,
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color=THEME["text_primary"],
-            fg_color=THEME["accent_blue"],
-            hover_color=THEME["accent_hover"],
-            border_color=THEME["secondary_btn_border"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
             border_width=2,
             corner_radius=4,
             height=22,
@@ -1336,9 +1357,9 @@ class LlamaLauncher(ctk.CTk):
                 variable=self.opt_vars[key],
                 font=ctk.CTkFont(family="Segoe UI", size=11),
                 text_color=THEME["text_primary"],
-                fg_color=THEME["accent_blue"],
-                hover_color=THEME["accent_hover"],
-                border_color=THEME["secondary_btn_border"],
+                fg_color=THEME["checkbox_active"],
+                hover_color=THEME["checkbox_hover"],
+                border_color=THEME["checkbox_border"],
                 border_width=2,
                 corner_radius=4,
                 height=24,
@@ -1352,8 +1373,8 @@ class LlamaLauncher(ctk.CTk):
                     values=options,
                     variable=self.opt_str_vars[key],
                     fg_color=THEME["input_bg"],
-                    button_color=THEME["secondary_btn_bg"],
-                    button_hover_color=THEME["secondary_btn_hover"],
+                    button_color="#27272a",
+                    button_hover_color="#3f3f46",
                     text_color=THEME["text_primary"],
                     dropdown_fg_color=THEME["dropdown_bg"],
                     dropdown_text_color=THEME["text_primary"],
@@ -1401,12 +1422,12 @@ class LlamaLauncher(ctk.CTk):
             self.main_container,
             text="🚀  Start Model Server",
             height=42,
-            fg_color=THEME["accent_blue"],
-            hover_color=THEME["accent_hover"],
+            fg_color=THEME["btn_maroon"],
+            hover_color=THEME["btn_maroon_hover"],
             border_width=1,
-            border_color=THEME["accent_glow"],
+            border_color=THEME["btn_maroon_border"],
             font=self.font_btn,
-            text_color=THEME["text_primary"],
+            text_color="#ffffff",
             corner_radius=8,
             command=self.toggle_server,
         )
@@ -1532,12 +1553,12 @@ class LlamaLauncher(ctk.CTk):
             self._flash_badge(f"⚠ FAILED TO LAUNCH: {e}", is_alert=True)
             return
 
-        # Update button to Stop Model Server state
+        # Update button to Stop Model Server state (Dark Maroon)
         self.start_btn.configure(
             text="🛑  Stop Model Server",
-            fg_color="#7f1d1d",
-            hover_color="#991b1b",
-            border_color="#dc2626",
+            fg_color="#600000",
+            hover_color="#4a0000",
+            border_color=THEME["btn_maroon_border"],
         )
         self._flash_badge("● SERVER RUNNING")
         self.after(500, self._poll_server_status)
@@ -1567,9 +1588,9 @@ class LlamaLauncher(ctk.CTk):
         """Reset launch button styling back to start state."""
         self.start_btn.configure(
             text="🚀  Start Model Server",
-            fg_color=THEME["accent_blue"],
-            hover_color=THEME["accent_hover"],
-            border_color=THEME["accent_glow"],
+            fg_color=THEME["btn_maroon"],
+            hover_color=THEME["btn_maroon_hover"],
+            border_color=THEME["btn_maroon_border"],
         )
 
     def _poll_server_status(self):
