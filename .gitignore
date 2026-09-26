@@ -13,3 +13,6 @@ dist/
 *.exe
 
 # Local profile user overrides (optional, keep default profiles.json if desired)
+
+# Internal docs / notes
+newfeatures.md
