@@ -98,7 +98,38 @@ It includes dedicated hardware optimizations tuned for modern high-VRAM GPUs, sp
 
 ---
 
-## Installation & Running from Source
+## Quickstart (No Python Required)
+
+If you just want to run Llauncher without installing Python, Git, or dependencies:
+
+### 1. Download LLauncher
+Download the pre-compiled `LLauncher.exe` from the [Latest Releases](https://github.com/artifyr/LLauncher/releases) page (or grab `dist/LLauncher.exe` directly).
+
+### 2. Download llama.cpp (`llama-server.exe`)
+LLauncher is the graphical frontend for **llama.cpp**. You need the official engine:
+1. Go to the [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) page.
+2. Download the pre-built Windows zip archive matching your graphics card:
+   - **AMD Radeon GPUs**: Download `llama-bXXXX-bin-win-vulkan-x64.zip`.
+   - **NVIDIA GeForce / RTX GPUs**: Download `llama-bXXXX-bin-win-cuda-cuXX.X-x64.zip`.
+   - **Intel / CPU Only**: Download `llama-bXXXX-bin-win-cpu-x64.zip`.
+3. Extract the zip to any folder on your computer (e.g. `C:\Tools\llama.cpp\`). You will find `llama-server.exe` inside.
+
+### 3. Download a GGUF Model
+Download any `.gguf` quantized model from Hugging Face (e.g. from popular creators like `bartowski`, `TheBloke`, or `Qwen`):
+- For vision/multimodal models (like Qwen2-VL or LLaVA), also download its companion `mmproj-*.gguf` projector file into the same directory.
+
+### 4. Run Llauncher
+1. Double-click `LLauncher.exe`.
+2. Click **Browse** next to **`llama-server.exe`** and select the executable extracted in Step 2.
+3. Click **Browse** next to **`Model GGUF`** (or pick from **Recent Models**) and select your model file.
+4. Click **`🚀 Start Model Server`**.
+5. Once running, click **`🌐 Open Web UI`** to chat immediately in your browser, or configure your favorite client using **`⚙️ Client Configs`**!
+
+---
+
+## Running from Source (Developers)
+
+If you prefer to run or modify the Python source code directly:
 
 ### 1. Clone the Repository
 
