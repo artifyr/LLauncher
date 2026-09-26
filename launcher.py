@@ -524,9 +524,9 @@ class LlamaLauncher(ctk.CTk):
         self.exe_entry.insert(0, self.llama_exe)
         self.exe_entry.grid(row=0, column=1, sticky="ew", padx=(4, 8), pady=(8, 4))
 
-        self.detect_btn = ctk.CTkButton(
+        self.browse_exe_btn = ctk.CTkButton(
             card,
-            text="Detect GPUs",
+            text="Browse",
             width=85,
             height=30,
             fg_color=THEME["secondary_btn_bg"],
@@ -535,10 +535,10 @@ class LlamaLauncher(ctk.CTk):
             border_color=THEME["secondary_btn_border"],
             text_color=THEME["text_primary"],
             corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            command=self._refresh_devices,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            command=self.browse_exe,
         )
-        self.detect_btn.grid(row=0, column=2, sticky="e", padx=(0, 12), pady=(8, 4))
+        self.browse_exe_btn.grid(row=0, column=2, sticky="e", padx=(0, 12), pady=(8, 4))
 
         # Row 1: Model GGUF
         ctk.CTkLabel(
@@ -811,6 +811,22 @@ class LlamaLauncher(ctk.CTk):
         )
         self.threads_entry.insert(0, "8")
         self.threads_entry.grid(row=0, column=3, sticky="ew")
+
+        # Row 5: Detect GPUs Action Button (Placed below Ports & Threads)
+        self.detect_btn = ctk.CTkButton(
+            card,
+            text="Detect GPUs",
+            height=28,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["text_primary"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self._refresh_devices,
+        )
+        self.detect_btn.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
 
     def _on_ngl_change(self, val):
         v = int(round(val))
@@ -1204,6 +1220,16 @@ class LlamaLauncher(ctk.CTk):
             command=self.launch,
         )
         self.start_btn.pack(fill="x", padx=2, pady=(2, 0))
+
+    def browse_exe(self):
+        f = filedialog.askopenfilename(
+            filetypes=[("Executable Files", "*.exe"), ("All Files", "*.*")],
+            title="Select llama-server.exe"
+        )
+        if f:
+            self.exe_entry.delete(0, "end")
+            self.exe_entry.insert(0, f)
+            self._refresh_devices()
 
     def browse_model(self):
         f = filedialog.askopenfilename(filetypes=[("GGUF Files", "*.gguf")])
