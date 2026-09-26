@@ -27,28 +27,30 @@ def resource_path(relative_path):
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# Design Tokens (Aero Glass & Deep Space Obsidian with Maroon Accents)
+# Design Tokens (Aero Glass & Deep Space Obsidian with Dark Red Accents)
 THEME = {
-    "bg": "#060305",
+    "bg": "#060203",
     "card_bg": "transparent",
-    "card_border": "#28121c",
-    "dropdown_bg": "#14090e",
-    "input_bg": "#0a0407",
-    "input_border": "#220e18",
-    "input_focus": "#be123c",
+    "card_border": "#280d12",
+    "dropdown_bg": "#140608",
+    "input_bg": "#0a0304",
+    "input_border": "#220b0f",
+    "input_focus": "#990000",
+    "modal_bg": "#100507",
     "text_primary": "#cbd5e1",
     "text_secondary": "#64748b",
     "text_muted": "#475569",
-    "accent_blue": "#881337",      # Maroon primary accent
-    "accent_maroon": "#881337",    # Rich maroon
-    "accent_hover": "#5c071e",     # Darker wine maroon hover
-    "accent_glow": "#be123c",      # Crimson highlight
-    "cyan_badge": "#be123c",       # Maroon section titles and badges
-    "secondary_btn_bg": "#120a10",
-    "secondary_btn_hover": "#1d0e19",
-    "secondary_btn_border": "#2c1422",
-    "badge_bg": "#16070d",
-    "badge_border": "#3b0f1a",
+    "accent_blue": "#8b0000",      # Pure dark red
+    "accent_red": "#8b0000",       # Pure dark red
+    "accent_maroon": "#8b0000",    # Alias
+    "accent_hover": "#5c0000",     # Deep dark red hover
+    "accent_glow": "#990000",      # Pure dark red highlight
+    "cyan_badge": "#dc2626",       # Pure dark red badges & headers (zero pink)
+    "secondary_btn_bg": "#120608",
+    "secondary_btn_hover": "#1e0a0d",
+    "secondary_btn_border": "#2e0f14",
+    "badge_bg": "#150507",
+    "badge_border": "#360a0f",
 }
 
 # Pre-defined step ladders
@@ -134,6 +136,100 @@ DEFAULT_PROFILES = [
         },
     },
 ]
+
+
+class RenameProfileDialog(ctk.CTkInputDialog):
+    """Custom themed rename dialog matching the Obsidian & Dark Red Aero aesthetic."""
+
+    def __init__(self, curr_name: str, master=None):
+        self._initial_name = curr_name
+        self._parent = master
+        super().__init__(
+            title="Rename Profile",
+            text=f"Enter custom name for '{curr_name}':",
+            fg_color=THEME["modal_bg"],
+            text_color=THEME["text_primary"],
+            button_fg_color=THEME["accent_red"],
+            button_hover_color=THEME["accent_hover"],
+            button_text_color="#ffffff",
+            entry_fg_color=THEME["input_bg"],
+            entry_border_color=THEME["input_border"],
+            entry_text_color=THEME["text_primary"],
+        )
+
+        # Set taskbar & window icon
+        ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
+        if not os.path.exists(ico_file):
+            ico_file = resource_path("llauncher.ico")
+        if os.path.exists(ico_file):
+            try:
+                self.iconbitmap(ico_file)
+            except Exception:
+                pass
+
+        # Apply dark/aero styling if pywinstyles is available
+        if HAS_PYWINSTYLES:
+            try:
+                pywinstyles.apply_style(self, style="aero")
+            except Exception:
+                pass
+
+        # Center on parent window if available
+        if master:
+            try:
+                self.update_idletasks()
+                m_x = master.winfo_x()
+                m_y = master.winfo_y()
+                m_w = master.winfo_width()
+                m_h = master.winfo_height()
+                d_w, d_h = 360, 180
+                pos_x = max(0, m_x + (m_w - d_w) // 2)
+                pos_y = max(0, m_y + (m_h - d_h) // 2)
+                self.geometry(f"{d_w}x{d_h}+{pos_x}+{pos_y}")
+            except Exception:
+                pass
+
+    def _create_widgets(self):
+        super()._create_widgets()
+
+        if hasattr(self, "_label"):
+            self._label.configure(
+                font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+                text_color=THEME["text_primary"],
+            )
+
+        if hasattr(self, "_entry"):
+            self._entry.configure(
+                corner_radius=6,
+                border_width=1,
+                border_color=THEME["input_border"],
+                fg_color=THEME["input_bg"],
+                text_color=THEME["text_primary"],
+                font=ctk.CTkFont(family="Segoe UI", size=12),
+            )
+            if self._initial_name:
+                self._entry.insert(0, self._initial_name)
+                self._entry.select_range(0, "end")
+
+        if hasattr(self, "_ok_button"):
+            self._ok_button.configure(
+                fg_color=THEME["accent_red"],
+                hover_color=THEME["accent_hover"],
+                text_color="#ffffff",
+                corner_radius=6,
+                font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            )
+
+        if hasattr(self, "_cancel_button"):
+            self._cancel_button.configure(
+                fg_color=THEME["secondary_btn_bg"],
+                hover_color=THEME["secondary_btn_hover"],
+                border_width=1,
+                border_color=THEME["secondary_btn_border"],
+                text_color=THEME["text_primary"],
+                corner_radius=6,
+                font=ctk.CTkFont(family="Segoe UI", size=12),
+            )
 
 
 class LlamaLauncher(ctk.CTk):
@@ -425,7 +521,7 @@ class LlamaLauncher(ctk.CTk):
         idx = self.active_profile_idx
         curr_name = self.profiles[idx]["name"]
 
-        dialog = ctk.CTkInputDialog(text=f"Enter custom name for '{curr_name}':", title="Rename Profile")
+        dialog = RenameProfileDialog(curr_name, master=self)
         new_name = dialog.get_input()
 
         if new_name and new_name.strip():
