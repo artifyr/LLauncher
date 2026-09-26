@@ -24,21 +24,27 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
-def apply_dark_aero(window):
-    """Apply native Windows 11/10 DWM Immersive Dark Mode and Acrylic Blur with deep dark tint."""
+def apply_mica_style(window):
+    """Apply native Windows 11 Mica styling via pywinstyles."""
     if not HAS_PYWINSTYLES:
         window.configure(fg_color=THEME["bg"])
         return
     try:
-        # 1. Apply pywinstyles acrylic style (handles background paint, dark mode, and extends frame into client area)
-        try:
-            pywinstyles.apply_style(window, style="acrylic")
-        except Exception:
-            pass
+        # 1. Apply pywinstyles Mica style
+        pywinstyles.apply_style(window, style="mica")
 
         hwnd = pywinstyles.py_win_style.detect(window)
 
-        # 2. Force Windows 11 Immersive Dark Mode (DWMWA_USE_IMMERSIVE_DARK_MODE = 20)
+        # 2. Modern Windows 11 (22H2+) backdrop support: 2 = DWMSBT_MAINWINDOW (Mica)
+        try:
+            backdrop = ctypes.c_int(2)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop)
+            )
+        except Exception:
+            pass
+
+        # 3. Force Windows 11 Immersive Dark Mode (DWMWA_USE_IMMERSIVE_DARK_MODE = 20)
         try:
             dark_mode = ctypes.c_int(1)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
@@ -47,32 +53,13 @@ def apply_dark_aero(window):
         except Exception:
             pass
 
-        # 3. Style native titlebar and window border to match dark theme
+        # 4. Style native titlebar and window border to match dark theme
         try:
             pywinstyles.change_header_color(window, "#121215")
         except Exception:
             pass
         try:
             pywinstyles.change_border_color(window, "#27272a")
-        except Exception:
-            pass
-
-        # 4. Deep dark acrylic tint (0xEE101012: ~93% dark opacity, keeps glass blur without wash-out)
-        try:
-            pywinstyles.ChangeDWMAccent(hwnd, 30, 3, color=0xEE101012)
-        except Exception:
-            pass
-        try:
-            pywinstyles.ChangeDWMAccent(hwnd, 19, 4, color=0xEE101012)
-        except Exception:
-            pass
-
-        # 5. Set Windows 11 DWMWA_SYSTEMBACKDROP_TYPE to Acrylic (3)
-        try:
-            backdrop = ctypes.c_int(3)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop)
-            )
         except Exception:
             pass
     except Exception:
@@ -240,8 +227,8 @@ class RenameProfileDialog(ctk.CTkInputDialog):
             except Exception:
                 pass
 
-        # Apply native Windows dark aero/acrylic glass styling with dark tint
-        apply_dark_aero(self)
+        # Apply native Windows Mica styling
+        apply_mica_style(self)
 
         # Center on parent window if available
         if master:
@@ -379,8 +366,8 @@ class LlamaLauncher(ctk.CTk):
         # Apply initial active profile
         self._apply_profile(self.profiles[self.active_profile_idx])
 
-        # Apply native Windows dark aero/acrylic glass styling with dark tint
-        apply_dark_aero(self)
+        # Apply native Windows Mica styling
+        apply_mica_style(self)
 
         self.deiconify()
 
