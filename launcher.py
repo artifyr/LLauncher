@@ -2034,11 +2034,12 @@ class LlamaLauncher(ctk.CTk):
 
         action_row = ctk.CTkFrame(self.main_container, fg_color="transparent")
         action_row.pack(fill="x", padx=2, pady=(2, 0))
-        action_row.columnconfigure(0, weight=4)
+        action_row.columnconfigure(0, weight=3)
         action_row.columnconfigure(1, weight=1)
         action_row.columnconfigure(2, weight=1)
         action_row.columnconfigure(3, weight=1)
         action_row.columnconfigure(4, weight=1)
+        action_row.columnconfigure(5, weight=1)
 
         self.start_btn = ctk.CTkButton(
             action_row,
@@ -2103,7 +2104,7 @@ class LlamaLauncher(ctk.CTk):
 
         self.export_script_btn = ctk.CTkButton(
             action_row,
-            text="💾  Export Script",
+            text="💾  Export .ps1",
             height=42,
             fg_color=THEME["secondary_btn_bg"],
             hover_color=THEME["secondary_btn_hover"],
@@ -2114,7 +2115,22 @@ class LlamaLauncher(ctk.CTk):
             corner_radius=8,
             command=self.export_script,
         )
-        self.export_script_btn.grid(row=0, column=4, sticky="ew")
+        self.export_script_btn.grid(row=0, column=4, sticky="ew", padx=(0, 6))
+
+        self.import_script_btn = ctk.CTkButton(
+            action_row,
+            text="📥  Import .ps1",
+            height=42,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=8,
+            command=self.import_settings,
+        )
+        self.import_script_btn.grid(row=0, column=5, sticky="ew")
 
     def _build_log_drawer(self):
         """Build bottom collapsible log drawer and desktop ergonomics toolbar."""
@@ -2524,19 +2540,59 @@ class LlamaLauncher(ctk.CTk):
 
         return cmd
 
+    def _build_current_settings_dict(self) -> dict:
+        """Serialize the current launcher GUI state to a JSON-compatible dictionary."""
+        ctx_idx = int(round(self.ctx_slider.get()))
+        batch_idx = int(round(self.batch_slider.get()))
+        ubatch_idx = int(round(self.ubatch_slider.get()))
+
+        return {
+            "version": "1.3.0",
+            "exported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "exe": self.exe_entry.get().strip().strip('"').strip("'"),
+            "model": self.model_entry.get().strip().strip('"').strip("'"),
+            "vision_enabled": bool(self.vision_var.get()) if hasattr(self, "vision_var") else False,
+            "mmproj": self.mmproj_entry.get().strip().strip('"').strip("'") if hasattr(self, "mmproj_entry") and self.vision_var.get() else "",
+            "device": self.device_dropdown.get() if hasattr(self, "device_dropdown") else "Vulkan0",
+            "ngl": int(round(self.ngl_slider.get())),
+            "ctx_index": ctx_idx,
+            "ctx_tokens": CTX_STEPS[ctx_idx],
+            "batch_index": batch_idx,
+            "batch_size": BATCH_STEPS[batch_idx],
+            "ubatch_index": ubatch_idx,
+            "ubatch_size": UBATCH_STEPS[ubatch_idx],
+            "threads": self.threads_entry.get().strip(),
+            "port": self.port_entry.get().strip(),
+            "ctk": self.ctk_dropdown.get() if hasattr(self, "ctk_dropdown") else "q8_0",
+            "ctv": self.ctv_dropdown.get() if hasattr(self, "ctv_dropdown") else "q8_0",
+            "temp": self.temp_entry.get().strip(),
+            "topp": self.topp_entry.get().strip(),
+            "minp": self.minp_entry.get().strip(),
+            "flash_attention": bool(self.fa_var.get()) if hasattr(self, "fa_var") else True,
+            "jinja": bool(self.jinja_var.get()) if hasattr(self, "jinja_var") else True,
+            "optimizations": {
+                k: {
+                    "enabled": bool(self.opt_vars[k].get()),
+                    "value": self.opt_str_vars[k].get().strip()
+                }
+                for k in self.opt_vars
+            }
+        }
+
     def export_script(self):
-        """Export current configuration as a standalone PowerShell (.ps1) or Batch (.bat) script."""
+        """Export current settings & CLI launcher to a PowerShell (.ps1) script wherever the user chooses."""
         cmd_args = self._build_command_args()
         if not cmd_args:
             return
 
         exe = cmd_args[0]
         args_list = cmd_args[1:]
-        model_name = os.path.basename(self.model_entry.get().strip() or "model.gguf")
+        model_raw = self.model_entry.get().strip().strip('"').strip("'")
+        model_name = os.path.basename(model_raw) if model_raw else "model.gguf"
         suggested_name = f"run_{os.path.splitext(model_name)[0]}"
 
         file_path = filedialog.asksaveasfilename(
-            title="Export CLI Launcher Script",
+            title="Export Settings to PowerShell Script",
             initialfile=suggested_name,
             defaultextension=".ps1",
             filetypes=[
@@ -2551,11 +2607,16 @@ class LlamaLauncher(ctk.CTk):
         is_ps1 = file_path.lower().endswith(".ps1")
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Prepare embedded settings JSON
+        settings_dict = self._build_current_settings_dict()
+        formatted_json = json.dumps(settings_dict, indent=2)
+
         if is_ps1:
             ps_args = "\n    ".join([f'"{arg}"' for arg in args_list])
+            commented_json = "\n".join([f"# {line}" for line in formatted_json.splitlines()])
             content = (
                 f"# =====================================================================\n"
-                f"# LLauncher - Exported llama-server PowerShell Script\n"
+                f"# LLauncher - Exported llama-server PowerShell Script & Configuration\n"
                 f"# Model: {model_name}\n"
                 f"# Generated: {timestamp}\n"
                 f"# =====================================================================\n\n"
@@ -2565,20 +2626,33 @@ class LlamaLauncher(ctk.CTk):
                 f"    {ps_args}\n"
                 f")\n\n"
                 f"Write-Host \"Starting llama-server for {model_name}...\" -ForegroundColor Cyan\n"
-                f"& $llamaExe @serverArgs\n"
+                f"& $llamaExe @serverArgs\n\n"
+                f"# =====================================================================\n"
+                f"# LLauncher Embedded Settings (For importing back into LLauncher)\n"
+                f"# <LLAUNCHER_SETTINGS_JSON>\n"
+                f"{commented_json}\n"
+                f"# </LLAUNCHER_SETTINGS_JSON>\n"
+                f"# =====================================================================\n"
             )
         else:
             bat_cmd = f'"{exe}" ' + " ".join([f'"{a}"' if ' ' in a else a for a in args_list])
+            rem_json = "\n".join([f"REM {line}" for line in formatted_json.splitlines()])
             content = (
                 f"@echo off\n"
                 f"REM =====================================================================\n"
-                f"REM LLauncher - Exported llama-server Batch Script\n"
+                f"REM LLauncher - Exported llama-server Batch Script & Configuration\n"
                 f"REM Model: {model_name}\n"
                 f"REM Generated: {timestamp}\n"
                 f"REM =====================================================================\n\n"
                 f"set \"GGML_VK_DISABLE_PINNED=1\"\n\n"
                 f"echo Starting llama-server for {model_name}...\n"
                 f"{bat_cmd}\n\n"
+                f"REM =====================================================================\n"
+                f"REM LLauncher Embedded Settings (For importing back into LLauncher)\n"
+                f"REM <LLAUNCHER_SETTINGS_JSON>\n"
+                f"{rem_json}\n"
+                f"REM </LLAUNCHER_SETTINGS_JSON>\n"
+                f"REM =====================================================================\n\n"
                 f"pause\n"
             )
 
@@ -2586,10 +2660,331 @@ class LlamaLauncher(ctk.CTk):
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
             self._flash_badge(f"✓ EXPORTED: {os.path.basename(file_path)}")
-            self._log_system(f"💾 Exported CLI script to: {file_path}")
+            self._log_system(f"💾 Exported settings script to: {file_path}")
         except Exception as e:
             self._flash_badge(f"⚠ EXPORT FAILED: {e}", is_alert=True)
             self._log_system(f"⚠ Export failed: {e}")
+
+    export_settings = export_script
+
+    def import_settings(self):
+        """Import launcher settings from an exported PowerShell (.ps1) script or batch file."""
+        file_path = filedialog.askopenfilename(
+            title="Import Settings from Script",
+            filetypes=[
+                ("PowerShell Script (*.ps1)", "*.ps1"),
+                ("Batch Script (*.bat)", "*.bat"),
+                ("All Supported Scripts", "*.ps1;*.bat"),
+                ("All Files (*.*)", "*.*"),
+            ]
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            self._flash_badge(f"⚠ FAILED TO READ: {e}", is_alert=True)
+            self._log_system(f"⚠ Failed to read script: {e}")
+            return
+
+        # Check for embedded LLAUNCHER_SETTINGS_JSON block
+        json_match = re.search(r'(?:#|REM)\s*<LLAUNCHER_SETTINGS_JSON>\s*\n(.*?)\n(?:#|REM)\s*</LLAUNCHER_SETTINGS_JSON>', content, re.DOTALL)
+        if json_match:
+            try:
+                raw_lines = json_match.group(1).splitlines()
+                cleaned_lines = []
+                for line in raw_lines:
+                    l = line.strip()
+                    if l.startswith("REM"):
+                        l = l[3:].strip()
+                    elif l.startswith("#"):
+                        l = l[1:].strip()
+                    cleaned_lines.append(l)
+                cleaned_json = "\n".join(cleaned_lines)
+                settings = json.loads(cleaned_json)
+                self._apply_imported_settings_dict(settings)
+                self._flash_badge(f"✓ IMPORTED: {os.path.basename(file_path)}")
+                self._log_system(f"📥 Imported settings from: {file_path}")
+                return
+            except Exception as e:
+                self._log_system(f"⚠ Embedded JSON parse failed, falling back to CLI argument parser: {e}")
+
+        # Fallback: parse command arguments directly from script text
+        success = self._parse_and_apply_script_args(content)
+        if success:
+            self._flash_badge(f"✓ IMPORTED: {os.path.basename(file_path)}")
+            self._log_system(f"📥 Imported CLI parameters from: {file_path}")
+        else:
+            self._flash_badge("⚠ NO SETTINGS FOUND", is_alert=True)
+            self._log_system("⚠ Could not detect valid llama-server parameters in selected file.")
+
+    import_script = import_settings
+
+    def _apply_imported_settings_dict(self, s: dict):
+        """Apply a deserialized settings dictionary to the UI elements."""
+        if s.get("exe") and hasattr(self, "exe_entry"):
+            self.exe_entry.delete(0, "end")
+            self.exe_entry.insert(0, s["exe"])
+            self._refresh_devices()
+
+        if s.get("model") and hasattr(self, "model_entry"):
+            norm_m = os.path.normpath(s["model"])
+            self.model_entry.delete(0, "end")
+            self.model_entry.insert(0, norm_m)
+            self._add_recent_model(norm_m)
+
+        if hasattr(self, "vision_var"):
+            self.vision_var.set(s.get("vision_enabled", False))
+            if hasattr(self, "mmproj_entry"):
+                self.mmproj_entry.delete(0, "end")
+                if s.get("mmproj"):
+                    self.mmproj_entry.insert(0, s["mmproj"])
+            self._toggle_vision()
+
+        if s.get("device") and hasattr(self, "device_dropdown"):
+            dev_str = s["device"]
+            for k in self.device_map:
+                if self.device_map[k] == dev_str or k == dev_str:
+                    self.device_dropdown.set(k)
+                    break
+
+        if "ngl" in s and hasattr(self, "ngl_slider"):
+            ngl_val = int(s["ngl"])
+            self.ngl_slider.set(ngl_val)
+            self._on_ngl_change(ngl_val)
+
+        if hasattr(self, "ctx_slider"):
+            if "ctx_index" in s:
+                ctx_idx = int(s["ctx_index"])
+            elif "ctx_tokens" in s:
+                tokens = int(s["ctx_tokens"])
+                ctx_idx = min(range(len(CTX_STEPS)), key=lambda i: abs(CTX_STEPS[i] - tokens))
+            else:
+                ctx_idx = len(CTX_STEPS) - 1
+            self.ctx_slider.set(ctx_idx)
+            self._on_ctx_change(ctx_idx)
+
+        if hasattr(self, "batch_slider"):
+            if "batch_index" in s:
+                b_idx = int(s["batch_index"])
+            elif "batch_size" in s:
+                bs = int(s["batch_size"])
+                b_idx = min(range(len(BATCH_STEPS)), key=lambda i: abs(BATCH_STEPS[i] - bs))
+            else:
+                b_idx = BATCH_STEPS.index(1024) if 1024 in BATCH_STEPS else 0
+            self.batch_slider.set(b_idx)
+            self._on_batch_change(b_idx)
+
+        if hasattr(self, "ubatch_slider"):
+            if "ubatch_index" in s:
+                ub_idx = int(s["ubatch_index"])
+            elif "ubatch_size" in s:
+                ubs = int(s["ubatch_size"])
+                ub_idx = min(range(len(UBATCH_STEPS)), key=lambda i: abs(UBATCH_STEPS[i] - ubs))
+            else:
+                ub_idx = UBATCH_STEPS.index(256) if 256 in UBATCH_STEPS else 0
+            self.ubatch_slider.set(ub_idx)
+            self._on_ubatch_change(ub_idx)
+
+        if hasattr(self, "port_entry") and "port" in s:
+            self.port_entry.delete(0, "end")
+            self.port_entry.insert(0, str(s["port"]))
+
+        if hasattr(self, "threads_entry") and "threads" in s:
+            self.threads_entry.delete(0, "end")
+            self.threads_entry.insert(0, str(s["threads"]))
+
+        if hasattr(self, "ctk_dropdown") and s.get("ctk") in KV_CACHE_TYPES:
+            self.ctk_dropdown.set(s["ctk"])
+        if hasattr(self, "ctv_dropdown") and s.get("ctv") in KV_CACHE_TYPES:
+            self.ctv_dropdown.set(s["ctv"])
+
+        if hasattr(self, "temp_entry") and "temp" in s:
+            self.temp_entry.delete(0, "end")
+            self.temp_entry.insert(0, str(s["temp"]))
+
+        if hasattr(self, "topp_entry") and "topp" in s:
+            self.topp_entry.delete(0, "end")
+            self.topp_entry.insert(0, str(s["topp"]))
+
+        if hasattr(self, "minp_entry") and "minp" in s:
+            self.minp_entry.delete(0, "end")
+            self.minp_entry.insert(0, str(s["minp"]))
+
+        if hasattr(self, "fa_var") and "flash_attention" in s:
+            self.fa_var.set(bool(s["flash_attention"]))
+
+        if hasattr(self, "jinja_var") and "jinja" in s:
+            self.jinja_var.set(bool(s["jinja"]))
+
+        opts = s.get("optimizations", {})
+        for k in self.opt_vars:
+            if k in opts:
+                opt_item = opts[k]
+                if isinstance(opt_item, dict):
+                    self.opt_vars[k].set(bool(opt_item.get("enabled", False)))
+                    if "value" in opt_item:
+                        self.opt_str_vars[k].set(str(opt_item["value"]))
+                    elif "val" in opt_item:
+                        self.opt_str_vars[k].set(str(opt_item["val"]))
+                else:
+                    self.opt_vars[k].set(bool(opt_item))
+            self._toggle_opt_widget(k)
+
+    def _parse_and_apply_script_args(self, content: str) -> bool:
+        """Fallback parser to extract llama-server command arguments from script text."""
+        found_any = False
+
+        # Model: -m <path> or -m, "<path>"
+        m_match = re.search(r'(?:-m|--model)\s+["\']?([^"\'\r\n\t,]+)["\']?|["\'](?:-m|--model)["\']\s*,\s*["\']([^"\']+)["\']', content)
+        if m_match:
+            model_path = m_match.group(1) or m_match.group(2)
+            if model_path:
+                self.model_entry.delete(0, "end")
+                self.model_entry.insert(0, os.path.normpath(model_path.strip()))
+                self._add_recent_model(os.path.normpath(model_path.strip()))
+                found_any = True
+
+        # Exe: $llamaExe = "..." or "path/llama-server.exe"
+        exe_match = re.search(r'\$llamaExe\s*=\s*["\']([^"\']+)["\']|["\']([^"\']*llama-server(?:\.exe)?)[ "\']', content, re.IGNORECASE)
+        if exe_match:
+            exe_path = exe_match.group(1) or exe_match.group(2)
+            if exe_path and os.path.exists(exe_path):
+                self.exe_entry.delete(0, "end")
+                self.exe_entry.insert(0, os.path.normpath(exe_path.strip()))
+
+        # Vision mmproj: --mmproj <path>
+        mm_match = re.search(r'--mmproj\s+["\']?([^"\'\r\n\t,]+)["\']?|["\']--mmproj["\']\s*,\s*["\']([^"\']+)["\']', content)
+        if mm_match:
+            mm_path = mm_match.group(1) or mm_match.group(2)
+            if mm_path:
+                self.vision_var.set(True)
+                self._toggle_vision()
+                self.mmproj_entry.delete(0, "end")
+                self.mmproj_entry.insert(0, os.path.normpath(mm_path.strip()))
+                found_any = True
+
+        # NGL: -ngl <num>
+        ngl_match = re.search(r'(?:-ngl|--n-gpu-layers)\s+["\']?(\d+)["\']?|["\'](?:-ngl|--n-gpu-layers)["\']\s*,\s*["\'](\d+)["\']', content)
+        if ngl_match:
+            val = int(ngl_match.group(1) or ngl_match.group(2))
+            self.ngl_slider.set(val)
+            self._on_ngl_change(val)
+            found_any = True
+
+        # Context: -c <num>
+        ctx_match = re.search(r'(?:-c|--ctx-size)\s+["\']?(\d+)["\']?|["\'](?:-c|--ctx-size)["\']\s*,\s*["\'](\d+)["\']', content)
+        if ctx_match:
+            tokens = int(ctx_match.group(1) or ctx_match.group(2))
+            idx = min(range(len(CTX_STEPS)), key=lambda i: abs(CTX_STEPS[i] - tokens))
+            self.ctx_slider.set(idx)
+            self._on_ctx_change(idx)
+            found_any = True
+
+        # Batch: -b <num>
+        b_match = re.search(r'(?:-b|--batch-size)\s+["\']?(\d+)["\']?|["\'](?:-b|--batch-size)["\']\s*,\s*["\'](\d+)["\']', content)
+        if b_match:
+            bs = int(b_match.group(1) or b_match.group(2))
+            idx = min(range(len(BATCH_STEPS)), key=lambda i: abs(BATCH_STEPS[i] - bs))
+            self.batch_slider.set(idx)
+            self._on_batch_change(idx)
+            found_any = True
+
+        # Micro-batch: -ub <num>
+        ub_match = re.search(r'(?:-ub|--ubatch-size)\s+["\']?(\d+)["\']?|["\'](?:-ub|--ubatch-size)["\']\s*,\s*["\'](\d+)["\']', content)
+        if ub_match:
+            ubs = int(ub_match.group(1) or ub_match.group(2))
+            idx = min(range(len(UBATCH_STEPS)), key=lambda i: abs(UBATCH_STEPS[i] - ubs))
+            self.ubatch_slider.set(idx)
+            self._on_ubatch_change(idx)
+            found_any = True
+
+        # Threads: -t <num>
+        t_match = re.search(r'(?:-t|--threads)\s+["\']?(\d+)["\']?|["\'](?:-t|--threads)["\']\s*,\s*["\'](\d+)["\']', content)
+        if t_match:
+            self.threads_entry.delete(0, "end")
+            self.threads_entry.insert(0, t_match.group(1) or t_match.group(2))
+            found_any = True
+
+        # Port: --port <num>
+        p_match = re.search(r'--port\s+["\']?(\d+)["\']?|["\']--port["\']\s*,\s*["\'](\d+)["\']', content)
+        if p_match:
+            self.port_entry.delete(0, "end")
+            self.port_entry.insert(0, p_match.group(1) or p_match.group(2))
+            found_any = True
+
+        # Temp: --temp <val>
+        tmp_match = re.search(r'--temp\s+["\']?([\d\.]+)["\']?|["\']--temp["\']\s*,\s*["\']([\d\.]+)["\']', content)
+        if tmp_match:
+            self.temp_entry.delete(0, "end")
+            self.temp_entry.insert(0, tmp_match.group(1) or tmp_match.group(2))
+            found_any = True
+
+        # Top-P: --top-p <val>
+        topp_match = re.search(r'--top-p\s+["\']?([\d\.]+)["\']?|["\']--top-p["\']\s*,\s*["\']([\d\.]+)["\']', content)
+        if topp_match:
+            self.topp_entry.delete(0, "end")
+            self.topp_entry.insert(0, topp_match.group(1) or topp_match.group(2))
+            found_any = True
+
+        # Min-P: --min-p <val>
+        minp_match = re.search(r'--min-p\s+["\']?([\d\.]+)["\']?|["\']--min-p["\']\s*,\s*["\']([\d\.]+)["\']', content)
+        if minp_match:
+            self.minp_entry.delete(0, "end")
+            self.minp_entry.insert(0, minp_match.group(1) or minp_match.group(2))
+            found_any = True
+
+        # CTK: -ctk <val>
+        ctk_match = re.search(r'-ctk\s+["\']?(\w+)["\']?|["\']-ctk["\']\s*,\s*["\'](\w+)["\']', content)
+        if ctk_match:
+            val = ctk_match.group(1) or ctk_match.group(2)
+            if hasattr(self, "ctk_dropdown") and val in KV_CACHE_TYPES:
+                self.ctk_dropdown.set(val)
+                found_any = True
+
+        # CTV: -ctv <val>
+        ctv_match = re.search(r'-ctv\s+["\']?(\w+)["\']?|["\']-ctv["\']\s*,\s*["\'](\w+)["\']', content)
+        if ctv_match:
+            val = ctv_match.group(1) or ctv_match.group(2)
+            if hasattr(self, "ctv_dropdown") and val in KV_CACHE_TYPES:
+                self.ctv_dropdown.set(val)
+                found_any = True
+
+        # Flash attention: -fa
+        if "-fa" in content:
+            self.fa_var.set(True)
+            found_any = True
+
+        # Jinja: --jinja
+        if "--jinja" in content:
+            self.jinja_var.set(True)
+            found_any = True
+
+        # Optimizations
+        opts_mapping = {
+            "mlock": r'--load-mode\s+["\']?(\w+)["\']?|["\']--load-mode["\']\s*,\s*["\'](\w+)["\']',
+            "tb": r'-tb\s+["\']?(\d+)["\']?|["\']-tb["\']\s*,\s*["\'](\d+)["\']',
+            "fit_target": r'--fit-target\s+["\']?(\d+)["\']?|["\']--fit-target["\']\s*,\s*["\'](\d+)["\']',
+            "cache_reuse": r'--cache-reuse\s+["\']?(\d+)["\']?|["\']--cache-reuse["\']\s*,\s*["\'](\d+)["\']',
+            "parallel": r'-np\s+["\']?(\d+)["\']?|["\']-np["\']\s*,\s*["\'](\d+)["\']',
+            "cache_ram": r'--cache-ram\s+["\']?(\d+)["\']?|["\']--cache-ram["\']\s*,\s*["\'](\d+)["\']',
+            "cpu_moe": r'--n-cpu-moe\s+["\']?(\d+)["\']?|["\']--n-cpu-moe["\']\s*,\s*["\'](\d+)["\']',
+        }
+
+        for opt_key, pat in opts_mapping.items():
+            if opt_key in self.opt_vars:
+                m = re.search(pat, content)
+                if m:
+                    val = m.group(1) or m.group(2)
+                    self.opt_vars[opt_key].set(True)
+                    if val:
+                        self.opt_str_vars[opt_key].set(val)
+                    self._toggle_opt_widget(opt_key)
+                    found_any = True
+
+        return found_any
 
     def toggle_server(self):
         """Toggle server between running and stopped."""
@@ -2795,6 +3190,9 @@ class LlamaLauncher(ctk.CTk):
                 pystray.MenuItem("Stop Model Server", lambda: self.after(0, self.stop_server), visible=lambda item: self.is_server_running()),
                 pystray.MenuItem("Restart Model Server", lambda: self.after(0, self.restart_server)),
                 pystray.MenuItem("View Logs", lambda: self.after(0, self.open_log_console)),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Export Settings (.ps1)", lambda: self.after(0, self.export_script)),
+                pystray.MenuItem("Import Settings (.ps1)", lambda: self.after(0, self.import_settings)),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Exit", lambda: self.after(0, self._exit_app)),
             )
