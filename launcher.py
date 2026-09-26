@@ -147,7 +147,7 @@ class LlamaLauncher(ctk.CTk):
         # Apply Windows Aero glass styling via pywinstyles
         if HAS_PYWINSTYLES:
             try:
-                pywinstyles.apply_style(self, style="win7")
+                pywinstyles.apply_style(self, style="aero")
             except Exception:
                 self.configure(fg_color=THEME["bg"])
 
