@@ -3,6 +3,7 @@ import sys
 import re
 import json
 import subprocess
+import threading
 import customtkinter as ctk
 from tkinter import filedialog
 
@@ -138,18 +139,12 @@ DEFAULT_PROFILES = [
 class LlamaLauncher(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self.withdraw()  # Off-screen construction eliminates launch stutter and flicker
         self.title("LLauncher - llama.cpp Server Launcher")
         self.geometry("1184x565")
         self.minsize(1120, 530)
         self.resizable(True, True)
         self.configure(fg_color="black")
-
-        # Apply Windows Aero glass styling via pywinstyles
-        if HAS_PYWINSTYLES:
-            try:
-                pywinstyles.apply_style(self, style="aero")
-            except Exception:
-                self.configure(fg_color=THEME["bg"])
 
         # Window Icon
         ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
@@ -174,7 +169,11 @@ class LlamaLauncher(ctk.CTk):
         self.font_sm = ctk.CTkFont(family="Segoe UI", size=11)
 
         # Device mapping {display_label: device_arg}
-        self.device_map = {}
+        self.device_map = {
+            "Vulkan0: AMD Radeon RX 9070 XT": "Vulkan0",
+            "Vulkan1: AMD Radeon(TM) Graphics": "Vulkan1",
+            "none: CPU Only": "none",
+        }
 
         # Profile state
         self.profiles = []
@@ -190,9 +189,6 @@ class LlamaLauncher(ctk.CTk):
 
         # 2. Binary & Model Paths (Full-width row)
         self._build_paths_card()
-
-        # Detect devices
-        self._detect_devices()
 
         # 3. Horizontal 3-Column Grid (Direct grid without redundant intermediate wrappers)
         cols_container = ctk.CTkFrame(self.main_container, fg_color="transparent")
@@ -214,8 +210,20 @@ class LlamaLauncher(ctk.CTk):
         # 4. Launch Action Button (Full width bottom)
         self._build_launch_action()
 
-        # Apply initial active profile (Defaults to Balanced)
+        # Apply initial active profile
         self._apply_profile(self.profiles[self.active_profile_idx])
+
+        # Apply Windows Aero glass styling via pywinstyles & reveal window
+        if HAS_PYWINSTYLES:
+            try:
+                pywinstyles.apply_style(self, style="aero")
+            except Exception:
+                self.configure(fg_color=THEME["bg"])
+
+        self.deiconify()
+
+        # Detect devices asynchronously in background without freezing UI
+        self._detect_devices()
 
     def _load_profiles(self):
         """Load profiles from profiles.json or initialize with defaults."""
@@ -572,46 +580,63 @@ class LlamaLauncher(ctk.CTk):
         )
         self.browse_btn.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 8))
 
-    def _detect_devices(self):
-        """Detect GPU devices via llama-server --list-devices."""
-        self.device_map = {}
-        exe = self.exe_entry.get().strip() if hasattr(self, "exe_entry") else self.llama_exe
+    def _detect_devices(self, on_done=None):
+        """Detect GPU devices asynchronously via llama-server --list-devices to prevent launch lag."""
+        def worker():
+            exe = self.exe_entry.get().strip() if hasattr(self, "exe_entry") else self.llama_exe
+            new_map = {}
+            try:
+                proc = subprocess.run(
+                    [exe, "--list-devices"],
+                    capture_output=True,
+                    text=True,
+                    timeout=4,
+                )
+                for line in proc.stdout.splitlines():
+                    line = line.strip()
+                    if not line or line.lower().startswith("available"):
+                        continue
+                    if ":" in line:
+                        dev_id = line.split(":", 1)[0].strip()
+                        desc = line.split(":", 1)[1].strip()
+                        clean_desc = re.sub(r"\s*\(\d+\s*MiB.*?\)", "", desc).strip()
+                        new_map[f"{dev_id}: {clean_desc}"] = dev_id
+            except Exception:
+                pass
 
-        try:
-            proc = subprocess.run(
-                [exe, "--list-devices"],
-                capture_output=True,
-                text=True,
-                timeout=4,
-            )
-            for line in proc.stdout.splitlines():
-                line = line.strip()
-                if not line or line.lower().startswith("available"):
-                    continue
-                if ":" in line:
-                    dev_id = line.split(":", 1)[0].strip()
-                    desc = line.split(":", 1)[1].strip()
-                    clean_desc = re.sub(r"\s*\(\d+\s*MiB.*?\)", "", desc).strip()
-                    display_str = f"{dev_id}: {clean_desc}"
-                    self.device_map[display_str] = dev_id
-        except Exception:
-            pass
+            if new_map:
+                if not any(v == "none" for v in new_map.values()):
+                    new_map["none: CPU Only"] = "none"
 
-        if not self.device_map:
-            self.device_map = {
-                "Vulkan0: AMD Radeon RX 9070 XT": "Vulkan0",
-                "Vulkan1: AMD Radeon(TM) Graphics": "Vulkan1",
-                "none: CPU Only": "none",
-            }
-        else:
-            if not any(v == "none" for v in self.device_map.values()):
-                self.device_map["none: CPU Only"] = "none"
+                def apply_results():
+                    self.device_map = new_map
+                    if hasattr(self, "device_dropdown"):
+                        options = list(self.device_map.keys())
+                        curr = self.device_dropdown.get()
+                        self.device_dropdown.configure(values=options)
+                        if curr in self.device_map:
+                            self.device_dropdown.set(curr)
+                        else:
+                            self.device_dropdown.set(self._get_default_device_display())
+                    if on_done:
+                        on_done()
+
+                self.after(0, apply_results)
+            else:
+                if on_done:
+                    self.after(0, on_done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _refresh_devices(self):
-        self._detect_devices()
-        options = list(self.device_map.keys())
-        self.device_dropdown.configure(values=options)
-        self.device_dropdown.set(self._get_default_device_display())
+        if hasattr(self, "detect_btn"):
+            self.detect_btn.configure(text="Detecting...", state="disabled")
+
+        def finish():
+            if hasattr(self, "detect_btn"):
+                self.detect_btn.configure(text="Detect GPUs", state="normal")
+
+        self._detect_devices(on_done=finish)
 
     def _get_default_device_display(self):
         for disp, dev_id in self.device_map.items():
