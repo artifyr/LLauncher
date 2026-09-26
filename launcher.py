@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import json
+import ctypes
 import subprocess
 import threading
 import customtkinter as ctk
@@ -23,20 +24,75 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
+def apply_dark_aero(window):
+    """Apply native Windows 11/10 DWM Immersive Dark Mode and Acrylic Blur with deep dark tint."""
+    if not HAS_PYWINSTYLES:
+        window.configure(fg_color=THEME["bg"])
+        return
+    try:
+        # 1. Apply pywinstyles acrylic style (handles background paint, dark mode, and extends frame into client area)
+        try:
+            pywinstyles.apply_style(window, style="acrylic")
+        except Exception:
+            pass
+
+        hwnd = pywinstyles.py_win_style.detect(window)
+
+        # 2. Force Windows 11 Immersive Dark Mode (DWMWA_USE_IMMERSIVE_DARK_MODE = 20)
+        try:
+            dark_mode = ctypes.c_int(1)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 20, ctypes.byref(dark_mode), ctypes.sizeof(dark_mode)
+            )
+        except Exception:
+            pass
+
+        # 3. Style native titlebar and window border to match dark theme
+        try:
+            pywinstyles.change_header_color(window, "#121215")
+        except Exception:
+            pass
+        try:
+            pywinstyles.change_border_color(window, "#27272a")
+        except Exception:
+            pass
+
+        # 4. Deep dark acrylic tint (0xEE101012: ~93% dark opacity, keeps glass blur without wash-out)
+        try:
+            pywinstyles.ChangeDWMAccent(hwnd, 30, 3, color=0xEE101012)
+        except Exception:
+            pass
+        try:
+            pywinstyles.ChangeDWMAccent(hwnd, 19, 4, color=0xEE101012)
+        except Exception:
+            pass
+
+        # 5. Set Windows 11 DWMWA_SYSTEMBACKDROP_TYPE to Acrylic (3)
+        try:
+            backdrop = ctypes.c_int(3)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop)
+            )
+        except Exception:
+            pass
+    except Exception:
+        window.configure(fg_color=THEME["bg"])
+
+
 # Appearance & Theme Configuration
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# Design Tokens (Slight Dark Tint Aero Glass, Monochrome Black/Gray/White with Maroon Buttons)
+# Design Tokens (Dark Tint Aero Glass, Monochrome Black/Gray/White with Maroon Buttons)
 THEME = {
     "bg": "#0a0a0c",                  # Deep charcoal black fallback
-    "card_bg": "transparent",         # Translucent glass
+    "card_bg": "#121215",             # Dark glass card surface for guaranteed contrast
     "card_border": "#27272a",        # Clean zinc-800 border
     "dropdown_bg": "#18181b",        # Dark zinc dropdown
-    "input_bg": "#121214",           # Charcoal dark input
+    "input_bg": "#18181b",           # Charcoal dark input
     "input_border": "#27272a",       # Zinc border
     "input_focus": "#800000",        # Subtle maroon focus ring
-    "modal_bg": "#121214",           # Charcoal modal
+    "modal_bg": "#121215",           # Charcoal modal
     "text_primary": "#ffffff",       # Pure crisp white
     "text_secondary": "#a1a1aa",     # Zinc-400 clean gray
     "text_muted": "#71717a",         # Zinc-500 muted gray
@@ -48,7 +104,7 @@ THEME = {
     "slider_knob": "#e4e4e7",        # Crisp light zinc thumb
     "slider_knob_hover": "#ffffff",  # White on hover
     "slider_progress": "#71717a",    # Neutral gray progress fill
-    "slider_track": "#18181b",       # Dark zinc background track
+    "slider_track": "#222226",       # Dark zinc background track
 
     # Checkboxes (Monochrome Black/Gray/White)
     "checkbox_active": "#52525b",    # Neutral zinc active check
@@ -184,14 +240,8 @@ class RenameProfileDialog(ctk.CTkInputDialog):
             except Exception:
                 pass
 
-        # Apply dark/aero styling with slight dark tint if pywinstyles is available
-        if HAS_PYWINSTYLES:
-            try:
-                pywinstyles.apply_style(self, style="aero")
-                hwnd = pywinstyles.py_win_style.detect(self)
-                pywinstyles.ChangeDWMAccent(hwnd, 19, 3, color=0xD00a0a0c)
-            except Exception:
-                pass
+        # Apply native Windows dark aero/acrylic glass styling with dark tint
+        apply_dark_aero(self)
 
         # Center on parent window if available
         if master:
@@ -329,14 +379,8 @@ class LlamaLauncher(ctk.CTk):
         # Apply initial active profile
         self._apply_profile(self.profiles[self.active_profile_idx])
 
-        # Apply Windows Aero glass styling with slight dark tint via pywinstyles & reveal window
-        if HAS_PYWINSTYLES:
-            try:
-                pywinstyles.apply_style(self, style="aero")
-                hwnd = pywinstyles.py_win_style.detect(self)
-                pywinstyles.ChangeDWMAccent(hwnd, 19, 3, color=0xD00a0a0c)
-            except Exception:
-                self.configure(fg_color=THEME["bg"])
+        # Apply native Windows dark aero/acrylic glass styling with dark tint
+        apply_dark_aero(self)
 
         self.deiconify()
 
