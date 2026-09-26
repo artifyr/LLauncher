@@ -70,7 +70,7 @@ def apply_mica_style(window):
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# Design Tokens (Dark Tint Aero Glass, Monochrome Black/Gray/White with Maroon Buttons)
+# Design Tokens (Monochrome Obsidian Black/Gray/White with Off-White Accents & Buttons)
 THEME = {
     "bg": "#0a0a0c",                  # Deep charcoal black fallback
     "card_bg": "#121215",             # Dark glass card surface for guaranteed contrast
@@ -78,7 +78,7 @@ THEME = {
     "dropdown_bg": "#18181b",        # Dark zinc dropdown
     "input_bg": "#18181b",           # Charcoal dark input
     "input_border": "#27272a",       # Zinc border
-    "input_focus": "#800000",        # Subtle maroon focus ring
+    "input_focus": "#e4e4e7",        # Crisp off-white focus ring
     "modal_bg": "#121215",           # Charcoal modal
     "text_primary": "#ffffff",       # Pure crisp white
     "text_secondary": "#a1a1aa",     # Zinc-400 clean gray
@@ -98,19 +98,27 @@ THEME = {
     "checkbox_hover": "#71717a",     # Subtle hover
     "checkbox_border": "#3f3f46",    # Zinc border
 
-    # Maroon Buttons
-    "btn_maroon": "#800000",         # Rich classic maroon
-    "btn_maroon_hover": "#5c0000",   # Deep maroon hover
-    "btn_maroon_border": "#991b1b",  # Maroon border accent
-    "accent_blue": "#800000",        # Maroon primary action
-    "accent_red": "#800000",         # Maroon alias
-    "accent_maroon": "#800000",      # Maroon alias
-    "accent_hover": "#5c0000",       # Maroon hover
-    "accent_glow": "#991b1b",        # Maroon glow
-    "secondary_btn_bg": "#800000",   # Maroon buttons (Browse, Save, Rename, Detect)
-    "secondary_btn_hover": "#5c0000",# Maroon button hover
-    "secondary_btn_border": "#991b1b",# Maroon button border
-    "secondary_btn_text": "#ffffff", # Crisp white button text
+    # Primary Action (Start Model Server) - Off-White Luxury Aesthetic
+    "primary_btn_bg": "#f4f4f5",     # Refined off-white
+    "primary_btn_hover": "#ffffff",  # Pure crisp white hover
+    "primary_btn_border": "#ffffff", # Clean white border
+    "primary_btn_text": "#09090b",   # Deep dark charcoal text
+
+    # Secondary Action (Browse, Save, Rename, Detect) - Off-White Aesthetic
+    "secondary_btn_bg": "#e4e4e7",   # Subtle off-white zinc
+    "secondary_btn_hover": "#ffffff",# White on hover
+    "secondary_btn_border": "#d4d4d8",# Off-white silver border
+    "secondary_btn_text": "#09090b", # Deep dark charcoal text
+
+    # Backward-compatible Aliases
+    "btn_maroon": "#f4f4f5",
+    "btn_maroon_hover": "#ffffff",
+    "btn_maroon_border": "#ffffff",
+    "accent_blue": "#f4f4f5",
+    "accent_red": "#e4e4e7",
+    "accent_maroon": "#e4e4e7",
+    "accent_hover": "#ffffff",
+    "accent_glow": "#e4e4e7",
 }
 
 # Pre-defined step ladders
@@ -269,9 +277,11 @@ class RenameProfileDialog(ctk.CTkInputDialog):
 
         if hasattr(self, "_ok_button"):
             self._ok_button.configure(
-                fg_color=THEME["btn_maroon"],
-                hover_color=THEME["btn_maroon_hover"],
-                text_color="#ffffff",
+                fg_color=THEME["secondary_btn_bg"],
+                hover_color=THEME["secondary_btn_hover"],
+                border_width=1,
+                border_color=THEME["secondary_btn_border"],
+                text_color=THEME["secondary_btn_text"],
                 corner_radius=6,
                 font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             )
@@ -476,11 +486,11 @@ class LlamaLauncher(ctk.CTk):
             values=profile_names,
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             fg_color="#18181b",
-            selected_color=THEME["btn_maroon"],
-            selected_hover_color=THEME["btn_maroon_hover"],
+            selected_color=THEME["primary_btn_bg"],
+            selected_hover_color=THEME["primary_btn_hover"],
             unselected_color="#18181b",
             unselected_hover_color="#27272a",
-            text_color="#ffffff",
+            text_color=THEME["text_primary"],
             border_width=1,
             corner_radius=6,
             command=self._on_profile_selected,
@@ -488,6 +498,7 @@ class LlamaLauncher(ctk.CTk):
         )
         self.profile_seg.set(self.profiles[self.active_profile_idx]["name"])
         self.profile_seg.pack(side="left", padx=(0, 6))
+        self._update_profile_seg_colors(self.profiles[self.active_profile_idx]["name"])
 
         self.save_prof_btn = ctk.CTkButton(
             prof_box,
@@ -498,7 +509,7 @@ class LlamaLauncher(ctk.CTk):
             hover_color=THEME["secondary_btn_hover"],
             border_width=1,
             border_color=THEME["secondary_btn_border"],
-            text_color=THEME["text_primary"],
+            text_color=THEME["secondary_btn_text"],
             corner_radius=6,
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             command=self._save_current_profile,
@@ -514,12 +525,21 @@ class LlamaLauncher(ctk.CTk):
             hover_color=THEME["secondary_btn_hover"],
             border_width=1,
             border_color=THEME["secondary_btn_border"],
-            text_color=THEME["text_primary"],
+            text_color=THEME["secondary_btn_text"],
             corner_radius=6,
             font=ctk.CTkFont(family="Segoe UI", size=11),
             command=self._rename_current_profile,
         )
         self.rename_prof_btn.pack(side="left")
+
+    def _update_profile_seg_colors(self, selected_name):
+        """Update segmented button active text color for clean contrast."""
+        if hasattr(self, "profile_seg") and hasattr(self.profile_seg, "_buttons_dict"):
+            for name, btn in self.profile_seg._buttons_dict.items():
+                if name == selected_name:
+                    btn.configure(text_color=THEME["primary_btn_text"])
+                else:
+                    btn.configure(text_color=THEME["text_secondary"])
 
     def _flash_badge(self, text, is_alert=False):
         """Temporarily show confirmation feedback on the engine status pill."""
@@ -533,6 +553,7 @@ class LlamaLauncher(ctk.CTk):
             if p["name"] == selected_name:
                 self.active_profile_idx = idx
                 self._apply_profile(p)
+                self._update_profile_seg_colors(selected_name)
                 self._flash_badge(f"● LOADED: {selected_name.upper()}")
                 break
 
@@ -693,9 +714,9 @@ class LlamaLauncher(ctk.CTk):
             hover_color=THEME["secondary_btn_hover"],
             border_width=1,
             border_color=THEME["secondary_btn_border"],
-            text_color=THEME["text_primary"],
+            text_color=THEME["secondary_btn_text"],
             corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=12),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             command=self.browse_exe,
         )
         self.browse_exe_btn.grid(row=0, column=2, sticky="e", padx=(0, 12), pady=(8, 4))
@@ -755,9 +776,9 @@ class LlamaLauncher(ctk.CTk):
             hover_color=THEME["secondary_btn_hover"],
             border_width=1,
             border_color=THEME["secondary_btn_border"],
-            text_color=THEME["text_primary"],
+            text_color=THEME["secondary_btn_text"],
             corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=12),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             command=self.browse_model,
         )
         self.browse_btn.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 6))
@@ -795,9 +816,9 @@ class LlamaLauncher(ctk.CTk):
             hover_color=THEME["secondary_btn_hover"],
             border_width=1,
             border_color=THEME["secondary_btn_border"],
-            text_color=THEME["text_primary"],
+            text_color=THEME["secondary_btn_text"],
             corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=12),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             command=self.browse_mmproj,
         )
 
@@ -1063,7 +1084,7 @@ class LlamaLauncher(ctk.CTk):
             hover_color=THEME["secondary_btn_hover"],
             border_width=1,
             border_color=THEME["secondary_btn_border"],
-            text_color=THEME["text_primary"],
+            text_color=THEME["secondary_btn_text"],
             corner_radius=6,
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             command=self._refresh_devices,
@@ -1453,12 +1474,12 @@ class LlamaLauncher(ctk.CTk):
             self.main_container,
             text="🚀  Start Model Server",
             height=42,
-            fg_color=THEME["btn_maroon"],
-            hover_color=THEME["btn_maroon_hover"],
+            fg_color=THEME["primary_btn_bg"],
+            hover_color=THEME["primary_btn_hover"],
             border_width=1,
-            border_color=THEME["btn_maroon_border"],
+            border_color=THEME["primary_btn_border"],
             font=self.font_btn,
-            text_color="#ffffff",
+            text_color=THEME["primary_btn_text"],
             corner_radius=8,
             command=self.toggle_server,
         )
@@ -1471,14 +1492,14 @@ class LlamaLauncher(ctk.CTk):
         )
         if f:
             self.exe_entry.delete(0, "end")
-            self.exe_entry.insert(0, f)
+            self.exe_entry.insert(0, os.path.normpath(f))
             self._refresh_devices()
 
     def browse_model(self):
         f = filedialog.askopenfilename(filetypes=[("GGUF Files", "*.gguf")])
         if f:
             self.model_entry.delete(0, "end")
-            self.model_entry.insert(0, f)
+            self.model_entry.insert(0, os.path.normpath(f))
 
     def toggle_server(self):
         """Toggle server between running and stopped."""
@@ -1492,22 +1513,27 @@ class LlamaLauncher(ctk.CTk):
         self.start_server()
 
     def start_server(self):
-        exe = self.exe_entry.get().strip()
-        model = self.model_entry.get().strip()
-        if not model:
+        exe_raw = self.exe_entry.get().strip().strip('"').strip("'")
+        model_raw = self.model_entry.get().strip().strip('"').strip("'")
+        if not model_raw:
             self._flash_badge("⚠ SELECT MODEL GGUF", is_alert=True)
             return
+
+        exe = os.path.normpath(exe_raw)
+        model = os.path.normpath(model_raw)
 
         if not os.path.exists(exe):
             self._flash_badge("⚠ INVALID LLAMA-SERVER PATH", is_alert=True)
             return
 
         # Vision Model mmproj validation
+        mmproj = ""
         if self.vision_var.get():
-            mmproj = self.mmproj_entry.get().strip()
-            if not mmproj:
+            mmproj_raw = self.mmproj_entry.get().strip().strip('"').strip("'")
+            if not mmproj_raw:
                 self._flash_badge("⚠ SELECT MMPROJ GGUF", is_alert=True)
                 return
+            mmproj = os.path.normpath(mmproj_raw)
 
         # Resolve selected device argument (e.g. "Vulkan0")
         selected_device_display = self.device_dropdown.get()
@@ -1525,10 +1551,8 @@ class LlamaLauncher(ctk.CTk):
         ]
 
         # Vision Model: Pass mmproj tag if enabled
-        if self.vision_var.get():
-            mmproj = self.mmproj_entry.get().strip()
-            if mmproj:
-                cmd.extend(["--mmproj", mmproj])
+        if self.vision_var.get() and mmproj:
+            cmd.extend(["--mmproj", mmproj])
 
         cmd.extend([
             "--device", device_id,
@@ -1571,12 +1595,13 @@ class LlamaLauncher(ctk.CTk):
             val = self.opt_str_vars["cache_ram"].get().strip() or "8192"
             cmd.extend(["--cache-ram", val])
 
-        # Launch in a dedicated console window with Vulkan memory fix
+        # Launch in a dedicated console window with Vulkan memory fix and safe command string
         env = os.environ.copy()
         env["GGML_VK_DISABLE_PINNED"] = "1"
+        full_cmd = f'cmd.exe /k "{subprocess.list2cmdline(cmd)}"'
         try:
             self.server_proc = subprocess.Popen(
-                ["cmd.exe", "/k", subprocess.list2cmdline(cmd)],
+                full_cmd,
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
                 env=env,
             )
@@ -1584,12 +1609,13 @@ class LlamaLauncher(ctk.CTk):
             self._flash_badge(f"⚠ FAILED TO LAUNCH: {e}", is_alert=True)
             return
 
-        # Update button to Stop Model Server state (Dark Maroon)
+        # Update button to Stop Model Server state (Crimson danger state)
         self.start_btn.configure(
             text="🛑  Stop Model Server",
-            fg_color="#600000",
-            hover_color="#4a0000",
-            border_color=THEME["btn_maroon_border"],
+            fg_color="#7f1d1d",
+            hover_color="#991b1b",
+            border_color="#dc2626",
+            text_color="#ffffff",
         )
         self._flash_badge("● SERVER RUNNING")
         self.after(500, self._poll_server_status)
@@ -1616,12 +1642,13 @@ class LlamaLauncher(ctk.CTk):
         self._flash_badge("● SERVER STOPPED")
 
     def _reset_server_btn_ui(self):
-        """Reset launch button styling back to start state."""
+        """Reset launch button styling back to off-white start state."""
         self.start_btn.configure(
             text="🚀  Start Model Server",
-            fg_color=THEME["btn_maroon"],
-            hover_color=THEME["btn_maroon_hover"],
-            border_color=THEME["btn_maroon_border"],
+            fg_color=THEME["primary_btn_bg"],
+            hover_color=THEME["primary_btn_hover"],
+            border_color=THEME["primary_btn_border"],
+            text_color=THEME["primary_btn_text"],
         )
 
     def _poll_server_status(self):
