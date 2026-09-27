@@ -923,6 +923,7 @@ class ProfileHelperDialog(ctk.CTkToplevel):
 
 TASK:
 Generate a specialized, finetuned, and hardware-optimized profile script for LLauncher (a modern Windows GUI launcher for llama-server).
+Based on the provided hardware specifications (VRAM, RAM, CPU), calculate the memory budget and determine the best-fit suggested models and recommended quantization tiers (both for full GPU offload and hybrid CPU/RAM offload if applicable), and populate them in the top header comment.
 
 TARGET SYSTEM SPECIFICATIONS:
 {gpu_spec_str}
@@ -933,7 +934,8 @@ TARGET SYSTEM SPECIFICATIONS:
 STRICT LLAUNCHER COMPATIBILITY RULES & CONSTRAINTS:
 1. The script MUST be written as a valid Windows PowerShell script (`.ps1`).
 2. It MUST contain the executable `$serverArgs` array followed by the exact LLauncher embedded JSON configuration block within `# <LLAUNCHER_SETTINGS_JSON>` tags so LLauncher can parse and import it cleanly.
-3. Allowed values for LLauncher parameters:
+3. In the top comment block, you MUST evaluate the hardware specs and provide specific, tailored "Suggested Models" with recommended quantizations (e.g., "7B-14B Dense Q4_K_M/Q8_0 (Full VRAM offload), Mixtral 8x7B / Qwen 2.5 32B MoE Q4_K_M (Hybrid VRAM + RAM)").
+4. Allowed values for LLauncher parameters:
    - ctx_tokens: Must pick from [2048, 4096, 8192, 16384, 24576, 32768, 49152, 65536, 98304, 131072]
    - ctx_index: Corresponding 0-based index of ctx_tokens (0=2048, 1=4096, 2=8192, 3=16384, 4=24576, 5=32768, 6=49152, 7=65536, 8=98304, 9=131072)
    - batch_size: Pick from [128, 256, 512, 1024, 2048, 4096]
@@ -954,9 +956,9 @@ Output ONLY the raw PowerShell script formatted exactly like the template below.
 ```powershell
 # =====================================================================
 # LLauncher Profile: [Descriptive Profile Name]
-# Target Hardware: [Hardware details]
-# Suggested Models: [Model details]
-# Strategy: [1-sentence explanation of chosen flags]
+# Target Hardware: [Hardware details, e.g. GPU, CPU, System RAM]
+# Suggested Models: [Best-fit models with recommended quants, e.g. 7B-14B Dense (Full VRAM offload), 8x7B / Qwen-32B / DeepSeek MoE (Hybrid VRAM + DDR5)]
+# Strategy: [1-sentence explanation of chosen flags and optimization rationale]
 # =====================================================================
 
 $env:GGML_VK_DISABLE_PINNED = '1'
