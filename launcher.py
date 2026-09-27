@@ -994,7 +994,7 @@ Write-Host "Launching llama-server with [Profile Name]..." -ForegroundColor Cyan
 # LLauncher Embedded Settings (For importing back into LLauncher)
 # <LLAUNCHER_SETTINGS_JSON>
 # {{
-#   "version": "1.3.0",
+#   "version": "1.4.0",
 #   "profile_name": "[Profile Name]",
 #   "device": "Vulkan0",
 #   "ngl": <ngl_int>,
@@ -2910,7 +2910,7 @@ class LlamaLauncher(ctk.CTk):
         ubatch_idx = int(round(self.ubatch_slider.get()))
 
         return {
-            "version": "1.3.0",
+            "version": "1.4.0",
             "exported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "exe": self.exe_entry.get().strip().strip('"').strip("'"),
             "model": self.model_entry.get().strip().strip('"').strip("'"),
