@@ -215,6 +215,100 @@ DEFAULT_PROFILES = [
 ]
 
 
+class ToolTip:
+    """Lightweight sleek dark tooltip for CustomTkinter widgets."""
+
+    def __init__(self, widget, text: str, delay_ms: int = 400):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self.tip_window = None
+        self._after_id = None
+
+        targets = []
+        if hasattr(widget, "_buttons_dict") and widget._buttons_dict:
+            targets.extend(widget._buttons_dict.values())
+        else:
+            targets.append(widget)
+
+        for t in targets:
+            try:
+                t.bind("<Enter>", self._on_enter, add="+")
+                t.bind("<Leave>", self._on_leave, add="+")
+                t.bind("<ButtonPress>", self._on_leave, add="+")
+            except Exception:
+                try:
+                    if hasattr(t, "_canvas"):
+                        t._canvas.bind("<Enter>", self._on_enter, add="+")
+                        t._canvas.bind("<Leave>", self._on_leave, add="+")
+                        t._canvas.bind("<ButtonPress>", self._on_leave, add="+")
+                except Exception:
+                    pass
+
+    def _on_enter(self, event=None):
+        self._cancel_timer()
+        self._after_id = self.widget.after(self.delay_ms, self._show_tip)
+
+    def _on_leave(self, event=None):
+        self._cancel_timer()
+        self._hide_tip()
+
+    def _cancel_timer(self):
+        if self._after_id:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show_tip(self):
+        if self.tip_window or not self.text:
+            return
+
+        try:
+            x = self.widget.winfo_rootx() + 12
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+
+            self.tip_window = tw = ctk.CTkToplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.attributes("-topmost", True)
+            try:
+                tw.attributes("-alpha", 0.96)
+            except Exception:
+                pass
+            tw.wm_geometry(f"+{x}+{y}")
+
+            frame = ctk.CTkFrame(
+                tw,
+                fg_color="#18181b",
+                border_width=1,
+                border_color="#3f3f46",
+                corner_radius=6,
+            )
+            frame.pack(fill="both", expand=True)
+
+            label = ctk.CTkLabel(
+                frame,
+                text=self.text,
+                font=ctk.CTkFont(family="Segoe UI", size=10),
+                text_color="#f4f4f5",
+                padx=8,
+                pady=4,
+                justify="left",
+            )
+            label.pack()
+        except Exception:
+            self._hide_tip()
+
+    def _hide_tip(self):
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
+
+
 class RenameProfileDialog(ctk.CTkInputDialog):
     """Dialog to rename a profile."""
 
@@ -2108,6 +2202,7 @@ class LlamaLauncher(ctk.CTk):
         self._detect_devices()
         self._trigger_models_scan()
         self._update_memory_estimation()
+        self._apply_tooltips()
 
     def _load_profiles(self):
         """Load profiles from profiles.json or initialize with defaults."""
@@ -3983,7 +4078,7 @@ class LlamaLauncher(ctk.CTk):
         self.fa_var = ctk.BooleanVar(value=True)
         self.jinja_var = ctk.BooleanVar(value=True)
 
-        ctk.CTkCheckBox(
+        self.fa_chk = ctk.CTkCheckBox(
             tog_box,
             text="Flash Attention (-fa)",
             variable=self.fa_var,
@@ -3995,9 +4090,10 @@ class LlamaLauncher(ctk.CTk):
             border_width=2,
             corner_radius=4,
             height=22,
-        ).pack(side="left", padx=(0, 12))
+        )
+        self.fa_chk.pack(side="left", padx=(0, 12))
 
-        ctk.CTkCheckBox(
+        self.jinja_chk = ctk.CTkCheckBox(
             tog_box,
             text="Jinja Template (--jinja)",
             variable=self.jinja_var,
@@ -4009,7 +4105,8 @@ class LlamaLauncher(ctk.CTk):
             border_width=2,
             corner_radius=4,
             height=22,
-        ).pack(side="left")
+        )
+        self.jinja_chk.pack(side="left")
 
     def _on_batch_change(self, val):
         self.batch_badge.configure(text=str(BATCH_STEPS[int(round(val))]))
@@ -4071,6 +4168,7 @@ class LlamaLauncher(ctk.CTk):
         self.opt_vars = {}
         self.opt_str_vars = {}
         self.opt_widgets = {}
+        self.opt_chks = {}
 
         opts_config = [
             ("mlock", "Lock in RAM (--load-mode)", "dropdown", "mlock", ["mlock", "mmap+mlock"]),
@@ -4103,6 +4201,7 @@ class LlamaLauncher(ctk.CTk):
                 command=lambda k=key: self._toggle_opt_widget(k),
             )
             chk.grid(row=idx, column=0, sticky="w", padx=(12, 4), pady=2)
+            self.opt_chks[key] = chk
 
             if w_type == "dropdown":
                 widget = ctk.CTkOptionMenu(
@@ -4439,7 +4538,7 @@ class LlamaLauncher(ctk.CTk):
         self.log_filter_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.log_filter_entry.bind("<KeyRelease>", self._on_log_filter_changed)
 
-        ctk.CTkCheckBox(
+        self.autoscroll_chk = ctk.CTkCheckBox(
             filter_row,
             text="Auto-Scroll",
             variable=self.log_autoscroll_var,
@@ -4452,9 +4551,10 @@ class LlamaLauncher(ctk.CTk):
             corner_radius=4,
             height=24,
             width=20,
-        ).pack(side="left", padx=(0, 8))
+        )
+        self.autoscroll_chk.pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(
+        self.copy_logs_btn = ctk.CTkButton(
             filter_row,
             text="📋 Copy",
             height=26,
@@ -4467,9 +4567,10 @@ class LlamaLauncher(ctk.CTk):
             text_color="#e4e4e7",
             corner_radius=6,
             command=self.copy_logs,
-        ).pack(side="left", padx=(0, 6))
+        )
+        self.copy_logs_btn.pack(side="left", padx=(0, 6))
 
-        ctk.CTkButton(
+        self.clear_logs_btn = ctk.CTkButton(
             filter_row,
             text="🗑️ Clear",
             height=26,
@@ -4482,7 +4583,8 @@ class LlamaLauncher(ctk.CTk):
             text_color="#e4e4e7",
             corner_radius=6,
             command=self.clear_logs,
-        ).pack(side="left")
+        )
+        self.clear_logs_btn.pack(side="left")
 
         # Terminal text box
         self.log_textbox = ctk.CTkTextbox(
@@ -4499,6 +4601,210 @@ class LlamaLauncher(ctk.CTk):
         self.log_textbox.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self.log_textbox.insert("1.0", "[SYSTEM] Log console initialized. Ready to stream llama-server engine output.\n")
         self.log_textbox.configure(state="disabled")
+
+    def _apply_tooltips(self):
+        """Attach concise, informative tooltips to all interactive elements across the launcher."""
+        tips = {
+            # Profiles & Top Header
+            "profile_seg": "Switch hardware profile preset",
+            "save_prof_btn": "Save current settings to selected profile",
+            "rename_prof_btn": "Rename active profile preset",
+
+            # Paths Card
+            "exe_entry": "Path to llama-server.exe executable binary",
+            "browse_exe_btn": "Browse filesystem for llama-server.exe",
+            "models_dir_entry": "Folder containing .gguf models for auto-scanning",
+            "browse_dir_btn": "Select folder containing GGUF model files",
+            "refresh_models_btn": "Rescan models folder for new GGUF files",
+            "model_entry": "Active GGUF model file path or split part 00001",
+            "model_library_menu": "Quick-select model from configured folder",
+            "recent_models_menu": "Recently loaded model files history",
+            "browse_btn": "Browse filesystem for a .gguf model file",
+            "vision_chk": "Enable vision multimodal projector (--mmproj)",
+            "mmproj_entry": "Path to vision multimodal projector (.gguf)",
+            "mmproj_browse_btn": "Browse filesystem for mmproj .gguf file",
+
+            # Column 1: Hardware & Acceleration
+            "device_dropdown": "Select compute backend device (Vulkan/CUDA/CPU)",
+            "ngl_slider": "GPU layers offloaded (-ngl). 99 offloads all layers",
+            "ctx_slider": "Context window limit in tokens (-c)",
+            "port_entry": "HTTP server listening port (default: 8082)",
+            "threads_entry": "CPU worker threads for generation (-t)",
+            "detect_btn": "Query system GPUs via llama-server --list-devices",
+            "auto_fit_btn": "Auto-tune layers (-ngl) & context (-c) to fit VRAM safely",
+            "vram_est_card": "Pre-launch projected VRAM & RAM memory estimation",
+
+            # Column 2: Batching & Generation
+            "sampler_preset_menu": "Load curated sampling presets (Balanced, Code, Story, etc.)",
+            "batch_slider": "Logical prompt processing batch size (-b)",
+            "ubatch_slider": "Physical compute micro-batch size (-ub)",
+            "ctk_dropdown": "Key (K) cache quantization type (-ctk)",
+            "ctv_dropdown": "Value (V) cache quantization type (-ctv)",
+            "temp_entry": "Generation randomness temperature (--temp)",
+            "topp_entry": "Nucleus sampling probability threshold (--top-p)",
+            "minp_entry": "Minimum token probability threshold (--min-p)",
+            "fa_chk": "Flash Attention acceleration for lower VRAM & faster prompt processing (-fa)",
+            "jinja_chk": "Enable Jinja template parser for chat formatting (--jinja)",
+
+            # Column 3: Hardware Profile Optimizations
+            "opt_mlock": "Lock model weights in physical RAM to prevent OS swapping (--load-mode)",
+            "opt_tb": "Dedicated threads for prompt batch processing (-tb)",
+            "opt_fit_target": "VRAM margin in MiB reserved for driver headroom (--fit-target)",
+            "opt_cache_reuse": "KV cache chunk reuse threshold for faster repeated prompts (--cache-reuse)",
+            "opt_parallel": "Parallel processing slots for multi-turn requests (-np)",
+            "opt_cache_ram": "RAM allocated for context swap cache in MiB (--cache-ram)",
+            "opt_cpu_moe": "Number of MoE expert layers offloaded to CPU (--n-cpu-moe)",
+            "opt_ctx_shift": "Prevent OOM by shifting older context when full (--ctx-shift)",
+            "opt_defrag_thold": "KV cache defragmentation threshold ratio (--defrag-thold)",
+
+            # Action Row
+            "start_btn": "Launch or stop the llama-server HTTP process",
+            "open_webui_btn": "Open llama.cpp embedded Web UI in default browser",
+            "client_configs_btn": "View connection snippets for OpenAI, Ollama, LangChain, etc.",
+            "api_tester_btn": "Test model with live interactive API prompt tester",
+            "export_script_btn": "Export configured parameters as standalone PowerShell script",
+            "import_script_btn": "Import parameters from a previously exported PowerShell script",
+            "profile_helper_btn": "Automated hardware benchmark & profile recommendation wizard",
+
+            # Log Console & Bottom Drawer Toolbar
+            "drawer_toggle_btn": "Expand or collapse embedded live log console",
+            "auto_restart_chk": "Automatically restart server if process crashes unexpectedly",
+            "external_console_chk": "Launch server in separate Windows Command Prompt console",
+            "tray_close_chk": "Minimize application to system tray instead of closing",
+            "telemetry_strip": "Real-time inference tokens/sec, throughput & slot metrics",
+            "tunnel_btn": "Create instant public secure tunnel (Cloudflare / Ngrok)",
+            "tray_btn": "Minimize window directly to Windows system tray",
+            "log_filter_entry": "Filter console output by regex or keyword",
+            "copy_logs_btn": "Copy all console log lines to clipboard",
+            "clear_logs_btn": "Clear log console buffer",
+        }
+
+        # Header widgets
+        if hasattr(self, "profile_seg"):
+            ToolTip(self.profile_seg, tips["profile_seg"])
+        if hasattr(self, "save_prof_btn"):
+            ToolTip(self.save_prof_btn, tips["save_prof_btn"])
+        if hasattr(self, "rename_prof_btn"):
+            ToolTip(self.rename_prof_btn, tips["rename_prof_btn"])
+
+        # Paths Card
+        if hasattr(self, "exe_entry"):
+            ToolTip(self.exe_entry, tips["exe_entry"])
+        if hasattr(self, "browse_exe_btn"):
+            ToolTip(self.browse_exe_btn, tips["browse_exe_btn"])
+        if hasattr(self, "models_dir_entry"):
+            ToolTip(self.models_dir_entry, tips["models_dir_entry"])
+        if hasattr(self, "browse_dir_btn"):
+            ToolTip(self.browse_dir_btn, tips["browse_dir_btn"])
+        if hasattr(self, "refresh_models_btn"):
+            ToolTip(self.refresh_models_btn, tips["refresh_models_btn"])
+        if hasattr(self, "model_entry"):
+            ToolTip(self.model_entry, tips["model_entry"])
+        if hasattr(self, "model_library_menu"):
+            ToolTip(self.model_library_menu, tips["model_library_menu"])
+        if hasattr(self, "recent_models_menu"):
+            ToolTip(self.recent_models_menu, tips["recent_models_menu"])
+        if hasattr(self, "browse_btn"):
+            ToolTip(self.browse_btn, tips["browse_btn"])
+        if hasattr(self, "vision_chk"):
+            ToolTip(self.vision_chk, tips["vision_chk"])
+        if hasattr(self, "mmproj_entry"):
+            ToolTip(self.mmproj_entry, tips["mmproj_entry"])
+        if hasattr(self, "mmproj_browse_btn"):
+            ToolTip(self.mmproj_browse_btn, tips["mmproj_browse_btn"])
+
+        # Column 1
+        if hasattr(self, "device_dropdown"):
+            ToolTip(self.device_dropdown, tips["device_dropdown"])
+        if hasattr(self, "ngl_slider"):
+            ToolTip(self.ngl_slider, tips["ngl_slider"])
+        if hasattr(self, "ctx_slider"):
+            ToolTip(self.ctx_slider, tips["ctx_slider"])
+        if hasattr(self, "port_entry"):
+            ToolTip(self.port_entry, tips["port_entry"])
+        if hasattr(self, "threads_entry"):
+            ToolTip(self.threads_entry, tips["threads_entry"])
+        if hasattr(self, "detect_btn"):
+            ToolTip(self.detect_btn, tips["detect_btn"])
+        if hasattr(self, "auto_fit_btn"):
+            ToolTip(self.auto_fit_btn, tips["auto_fit_btn"])
+        if hasattr(self, "vram_est_card"):
+            ToolTip(self.vram_est_card, tips["vram_est_card"])
+
+        # Column 2
+        if hasattr(self, "sampler_preset_menu"):
+            ToolTip(self.sampler_preset_menu, tips["sampler_preset_menu"])
+        if hasattr(self, "batch_slider"):
+            ToolTip(self.batch_slider, tips["batch_slider"])
+        if hasattr(self, "ubatch_slider"):
+            ToolTip(self.ubatch_slider, tips["ubatch_slider"])
+        if hasattr(self, "ctk_dropdown"):
+            ToolTip(self.ctk_dropdown, tips["ctk_dropdown"])
+        if hasattr(self, "ctv_dropdown"):
+            ToolTip(self.ctv_dropdown, tips["ctv_dropdown"])
+        if hasattr(self, "temp_entry"):
+            ToolTip(self.temp_entry, tips["temp_entry"])
+        if hasattr(self, "topp_entry"):
+            ToolTip(self.topp_entry, tips["topp_entry"])
+        if hasattr(self, "minp_entry"):
+            ToolTip(self.minp_entry, tips["minp_entry"])
+        if hasattr(self, "fa_chk"):
+            ToolTip(self.fa_chk, tips["fa_chk"])
+        if hasattr(self, "jinja_chk"):
+            ToolTip(self.jinja_chk, tips["jinja_chk"])
+
+        # Column 3
+        if hasattr(self, "opt_chks"):
+            for k, chk in self.opt_chks.items():
+                tip_key = f"opt_{k}"
+                if tip_key in tips:
+                    ToolTip(chk, tips[tip_key])
+        if hasattr(self, "opt_widgets"):
+            for k, w in self.opt_widgets.items():
+                if w is not None:
+                    tip_key = f"opt_{k}"
+                    if tip_key in tips:
+                        ToolTip(w, tips[tip_key])
+
+        # Action Row
+        if hasattr(self, "start_btn"):
+            ToolTip(self.start_btn, tips["start_btn"])
+        if hasattr(self, "open_webui_btn"):
+            ToolTip(self.open_webui_btn, tips["open_webui_btn"])
+        if hasattr(self, "client_configs_btn"):
+            ToolTip(self.client_configs_btn, tips["client_configs_btn"])
+        if hasattr(self, "api_tester_btn"):
+            ToolTip(self.api_tester_btn, tips["api_tester_btn"])
+        if hasattr(self, "export_script_btn"):
+            ToolTip(self.export_script_btn, tips["export_script_btn"])
+        if hasattr(self, "import_script_btn"):
+            ToolTip(self.import_script_btn, tips["import_script_btn"])
+        if hasattr(self, "profile_helper_btn"):
+            ToolTip(self.profile_helper_btn, tips["profile_helper_btn"])
+
+        # Drawer & Bottom Bar
+        if hasattr(self, "drawer_toggle_btn"):
+            ToolTip(self.drawer_toggle_btn, tips["drawer_toggle_btn"])
+        if hasattr(self, "auto_restart_chk"):
+            ToolTip(self.auto_restart_chk, tips["auto_restart_chk"])
+        if hasattr(self, "external_console_chk"):
+            ToolTip(self.external_console_chk, tips["external_console_chk"])
+        if hasattr(self, "tray_close_chk"):
+            ToolTip(self.tray_close_chk, tips["tray_close_chk"])
+        if hasattr(self, "telemetry_strip"):
+            ToolTip(self.telemetry_strip, tips["telemetry_strip"])
+        if hasattr(self, "tunnel_btn"):
+            ToolTip(self.tunnel_btn, tips["tunnel_btn"])
+        if hasattr(self, "tray_btn"):
+            ToolTip(self.tray_btn, tips["tray_btn"])
+        if hasattr(self, "log_filter_entry"):
+            ToolTip(self.log_filter_entry, tips["log_filter_entry"])
+        if hasattr(self, "autoscroll_chk"):
+            ToolTip(self.autoscroll_chk, "Automatically scroll to bottom on new log output")
+        if hasattr(self, "copy_logs_btn"):
+            ToolTip(self.copy_logs_btn, tips["copy_logs_btn"])
+        if hasattr(self, "clear_logs_btn"):
+            ToolTip(self.clear_logs_btn, tips["clear_logs_btn"])
 
     def toggle_log_drawer(self):
         """Expand or collapse the in-window embedded log drawer."""
