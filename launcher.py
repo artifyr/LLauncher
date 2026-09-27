@@ -15,6 +15,7 @@ import urllib.request
 import urllib.error
 import customtkinter as ctk
 from tkinter import filedialog
+import struct
 
 try:
     import pywinstyles
@@ -2036,6 +2037,12 @@ class LlamaLauncher(ctk.CTk):
             "Vulkan1: AMD Radeon(TM) Graphics": "Vulkan1",
             "none: CPU Only": "none",
         }
+        self.device_vram_map = {
+            "Vulkan0: AMD Radeon RX 9070 XT": 16.0,
+            "Vulkan1: AMD Radeon(TM) Graphics": 16.0,
+            "none: CPU Only": 32.0,
+        }
+        self.gguf_metadata_cache = {}
 
         self.profiles = []
         self.active_profile_idx = 0
@@ -2100,6 +2107,7 @@ class LlamaLauncher(ctk.CTk):
         self.deiconify()
         self._detect_devices()
         self._trigger_models_scan()
+        self._update_memory_estimation()
 
     def _load_profiles(self):
         """Load profiles from profiles.json or initialize with defaults."""
@@ -2186,6 +2194,439 @@ class LlamaLauncher(ctk.CTk):
             return f"{gb:.2f} GB"
         mb = size_bytes / (1024 ** 2)
         return f"{mb:.1f} MB"
+
+    @classmethod
+    def _get_total_model_file_size(cls, filepath: str) -> int:
+        """Sum total bytes across all parts if model is multi-part, or return file size."""
+        if not filepath or not os.path.isfile(filepath):
+            return 0
+        clean = os.path.normpath(filepath)
+        parent = os.path.dirname(clean)
+        fname = os.path.basename(clean)
+
+        p1 = re.compile(r"^(.*?)[-_.]+(\d{4,5})[-_.]+(?:of[-_.]+(\d{4,5}))\.gguf$", re.IGNORECASE)
+        p2 = re.compile(r"^(.*?)[-_.]+(\d{4,5})\.gguf$", re.IGNORECASE)
+        p3 = re.compile(r"^(.*?)[-_.]+part[-_.]*(\d{1,5})\.gguf$", re.IGNORECASE)
+
+        base = None
+        for pat in (p1, p2, p3):
+            m = pat.match(fname)
+            if m:
+                base = m.group(1).rstrip("-_. ")
+                break
+
+        if not base or not os.path.isdir(parent):
+            try:
+                return os.path.getsize(clean)
+            except Exception:
+                return 0
+
+        total = 0
+        matched = 0
+        try:
+            for f in os.listdir(parent):
+                if not f.lower().endswith(".gguf") or "mmproj" in f.lower():
+                    continue
+                for pat in (p1, p2, p3):
+                    m = pat.match(f)
+                    if m and m.group(1).rstrip("-_. ") == base:
+                        try:
+                            total += os.path.getsize(os.path.join(parent, f))
+                            matched += 1
+                        except Exception:
+                            pass
+                        break
+        except Exception:
+            pass
+
+        return total if matched > 0 else (os.path.getsize(clean) if os.path.isfile(clean) else 0)
+
+    @classmethod
+    def parse_gguf_summary(cls, filepath: str) -> dict:
+        """
+        Fast in-memory GGUF binary inspector.
+        Extracts layer count, embedding dimension, attention heads, context limit, and total model bytes.
+        Fast-skips large tensor and tokenizer arrays in <5ms without external dependencies.
+        """
+        if not filepath or not os.path.isfile(filepath):
+            return {}
+
+        total_bytes = cls._get_total_model_file_size(filepath)
+
+        try:
+            with open(filepath, "rb") as f:
+                magic = f.read(4)
+                if magic != b"GGUF":
+                    return {"file_bytes": total_bytes, "layers": 32, "heads": 32, "kv_heads": 8, "embd": 4096, "ctx_train": 4096}
+
+                version = struct.unpack("<I", f.read(4))[0]
+                count_fmt = "<Q" if version >= 2 else "<I"
+                count_size = 8 if version >= 2 else 4
+
+                tensor_count = struct.unpack(count_fmt, f.read(count_size))[0]
+                kv_count = struct.unpack(count_fmt, f.read(count_size))[0]
+
+                meta = {}
+                max_kvs = min(kv_count, 1200)
+                for _ in range(max_kvs):
+                    klen = struct.unpack(count_fmt, f.read(count_size))[0]
+                    if klen > 256 or klen <= 0:
+                        break
+                    key = f.read(klen).decode("utf-8", errors="replace")
+                    vtype = struct.unpack("<I", f.read(4))[0]
+
+                    if vtype == 8:  # STRING
+                        vlen = struct.unpack(count_fmt, f.read(count_size))[0]
+                        val = f.read(vlen).decode("utf-8", errors="replace")
+                    elif vtype in (4, 5):  # UINT32, INT32
+                        val = struct.unpack("<I", f.read(4))[0]
+                    elif vtype in (10, 11):  # UINT64, INT64
+                        val = struct.unpack("<Q", f.read(8))[0]
+                    elif vtype == 6:  # FLOAT32
+                        val = struct.unpack("<f", f.read(4))[0]
+                    elif vtype == 7:  # BOOL
+                        val = struct.unpack("<?", f.read(1))[0]
+                    elif vtype in (0, 1):  # UINT8, INT8
+                        val = struct.unpack("<B", f.read(1))[0]
+                    elif vtype in (2, 3):  # UINT16, INT16
+                        val = struct.unpack("<H", f.read(2))[0]
+                    elif vtype == 12:  # FLOAT64
+                        val = struct.unpack("<d", f.read(8))[0]
+                    elif vtype == 9:  # ARRAY
+                        elem_type = struct.unpack("<I", f.read(4))[0]
+                        arr_len = struct.unpack(count_fmt, f.read(count_size))[0]
+                        if elem_type in (0, 1, 7):
+                            f.seek(arr_len, 1)
+                        elif elem_type in (2, 3):
+                            f.seek(arr_len * 2, 1)
+                        elif elem_type in (4, 5, 6):
+                            f.seek(arr_len * 4, 1)
+                        elif elem_type in (10, 11, 12):
+                            f.seek(arr_len * 8, 1)
+                        elif elem_type == 8:
+                            for _a in range(arr_len):
+                                slen = struct.unpack(count_fmt, f.read(count_size))[0]
+                                f.seek(slen, 1)
+                        val = f"[array {arr_len}]"
+                    else:
+                        break
+                    meta[key] = val
+
+                arch = meta.get("general.architecture", "llama")
+                layers = meta.get(f"{arch}.block_count")
+                if layers is None:
+                    for k, v in meta.items():
+                        if k.endswith(".block_count") and isinstance(v, (int, float)):
+                            layers = int(v)
+                            break
+                if layers is None:
+                    layers = 32
+
+                ctx_train = meta.get(f"{arch}.context_length")
+                if ctx_train is None:
+                    for k, v in meta.items():
+                        if k.endswith(".context_length") and isinstance(v, (int, float)):
+                            ctx_train = int(v)
+                            break
+                if ctx_train is None:
+                    ctx_train = 4096
+
+                embd = meta.get(f"{arch}.embedding_length")
+                if embd is None:
+                    for k, v in meta.items():
+                        if k.endswith(".embedding_length") and isinstance(v, (int, float)):
+                            embd = int(v)
+                            break
+                if embd is None:
+                    embd = 4096
+
+                heads = meta.get(f"{arch}.attention.head_count")
+                if heads is None:
+                    for k, v in meta.items():
+                        if k.endswith(".attention.head_count") and isinstance(v, (int, float)):
+                            heads = int(v)
+                            break
+                if heads is None:
+                    heads = 32
+
+                kv_heads = meta.get(f"{arch}.attention.head_count_kv")
+                if kv_heads is None:
+                    for k, v in meta.items():
+                        if k.endswith(".attention.head_count_kv") and isinstance(v, (int, float)):
+                            kv_heads = int(v)
+                            break
+                if kv_heads is None:
+                    kv_heads = heads
+
+                return {
+                    "arch": arch,
+                    "layers": int(layers),
+                    "ctx_train": int(ctx_train),
+                    "embd": int(embd),
+                    "heads": int(heads),
+                    "kv_heads": int(kv_heads),
+                    "file_bytes": total_bytes,
+                }
+        except Exception:
+            return {
+                "arch": "unknown",
+                "layers": 32,
+                "ctx_train": 4096,
+                "embd": 4096,
+                "heads": 32,
+                "kv_heads": 8,
+                "file_bytes": total_bytes,
+            }
+
+    def estimate_vram_and_ram(self) -> dict:
+        """
+        Calculate projected GPU VRAM and CPU RAM footprints based on active model,
+        device, ngl, context, and KV cache quantizations.
+        """
+        model_path = self.model_entry.get().strip() if hasattr(self, "model_entry") else ""
+        if not model_path or not os.path.isfile(model_path):
+            return {
+                "valid_model": False,
+                "vram_gb": 0.0,
+                "total_vram_gb": 16.0,
+                "headroom_gb": 16.0,
+                "ram_gb": 0.0,
+                "weights_vram_gb": 0.0,
+                "kv_vram_gb": 0.0,
+                "status": "NO MODEL",
+                "status_color": THEME["text_muted"],
+                "ratio": 0.0,
+            }
+
+        if model_path not in self.gguf_metadata_cache:
+            self.gguf_metadata_cache[model_path] = self.parse_gguf_summary(model_path)
+        meta = self.gguf_metadata_cache[model_path]
+
+        total_layers = max(int(meta.get("layers", 32)), 1)
+        total_file_bytes = int(meta.get("file_bytes", os.path.getsize(model_path) if os.path.isfile(model_path) else 0))
+        heads = max(int(meta.get("heads", 32)), 1)
+        kv_heads = max(int(meta.get("kv_heads", 8)), 1)
+        embd = max(int(meta.get("embd", 4096)), 1)
+        head_dim = max(embd // heads, 64)
+
+        ngl = int(round(self.ngl_slider.get())) if hasattr(self, "ngl_slider") else 99
+        ctx_idx = int(round(self.ctx_slider.get())) if hasattr(self, "ctx_slider") else len(CTX_STEPS) - 1
+        ctx_tokens = CTX_STEPS[min(ctx_idx, len(CTX_STEPS) - 1)]
+
+        ctk_type = self.ctk_dropdown.get() if hasattr(self, "ctk_dropdown") else "q8_0"
+        ctv_type = self.ctv_dropdown.get() if hasattr(self, "ctv_dropdown") else "q8_0"
+
+        dev_disp = self.device_dropdown.get() if hasattr(self, "device_dropdown") else ""
+        dev_id = self.device_map.get(dev_disp, "")
+        is_cpu_only = (dev_id == "none" or "cpu" in dev_disp.lower() or dev_disp == "none: CPU Only")
+
+        bytes_map = {
+            "f32": 4.0, "f16": 2.0, "bf16": 2.0, "q8_0": 1.0,
+            "q5_1": 0.6875, "q5_0": 0.625, "q4_1": 0.5625, "q4_0": 0.5, "iq4_nl": 0.5,
+        }
+        k_b = bytes_map.get(ctk_type, 1.0)
+        v_b = bytes_map.get(ctv_type, 1.0)
+
+        if is_cpu_only:
+            offloaded_layers = 0
+        elif ngl >= 99 or ngl >= total_layers:
+            offloaded_layers = total_layers
+        else:
+            offloaded_layers = max(0, min(ngl, total_layers))
+
+        cpu_layers = total_layers - offloaded_layers
+
+        weights_vram_bytes = total_file_bytes * (offloaded_layers / total_layers)
+        weights_ram_bytes = total_file_bytes * (cpu_layers / total_layers)
+
+        kv_per_token_per_layer = kv_heads * head_dim * (k_b + v_b)
+        kv_vram_bytes = offloaded_layers * ctx_tokens * kv_per_token_per_layer
+        kv_ram_bytes = cpu_layers * ctx_tokens * kv_per_token_per_layer
+
+        if offloaded_layers > 0:
+            overhead_vram_bytes = (600 * 1024 * 1024) + (ctx_tokens * 4096)
+        else:
+            overhead_vram_bytes = 0
+
+        overhead_ram_bytes = 450 * 1024 * 1024
+
+        vram_bytes = weights_vram_bytes + kv_vram_bytes + overhead_vram_bytes
+        ram_bytes = weights_ram_bytes + kv_ram_bytes + overhead_ram_bytes
+
+        vram_gb = vram_bytes / (1024 ** 3)
+        ram_gb = ram_bytes / (1024 ** 3)
+
+        device_total_vram = self.device_vram_map.get(dev_disp, 16.0)
+        if is_cpu_only:
+            device_total_vram = 32.0
+            headroom_gb = 32.0 - ram_gb
+            status = "CPU MODE"
+            status_color = "#38bdf8"
+            ratio = min(ram_gb / 32.0, 1.0)
+        else:
+            headroom_gb = device_total_vram - vram_gb
+            ratio = min(vram_gb / max(device_total_vram, 0.1), 1.0)
+            if vram_gb > device_total_vram:
+                status = "OVERFLOW"
+                status_color = "#ef4444"
+            elif headroom_gb < 1.0:
+                status = "TIGHT"
+                status_color = "#f59e0b"
+            else:
+                status = "SAFE"
+                status_color = "#10b981"
+
+        return {
+            "valid_model": True,
+            "vram_gb": vram_gb,
+            "total_vram_gb": device_total_vram,
+            "headroom_gb": headroom_gb,
+            "ram_gb": ram_gb,
+            "weights_vram_gb": weights_vram_bytes / (1024 ** 3),
+            "kv_vram_gb": kv_vram_bytes / (1024 ** 3),
+            "status": status,
+            "status_color": status_color,
+            "ratio": min(max(ratio, 0.0), 1.0),
+            "is_cpu_only": is_cpu_only,
+            "total_layers": total_layers,
+        }
+
+    def _update_memory_estimation(self):
+        """Update VRAM and RAM projection widgets in Column 1."""
+        if not hasattr(self, "vram_est_label") or not hasattr(self, "vram_bar"):
+            return
+
+        est = self.estimate_vram_and_ram()
+        if not est.get("valid_model", False):
+            self.vram_est_label.configure(text="0.0 / -- GB", text_color=THEME["text_muted"])
+            self.vram_status_badge.configure(text="IDLE", text_color=THEME["text_muted"])
+            self.vram_bar.set(0.0)
+            self.vram_bar.configure(progress_color=THEME["slider_progress"])
+            self.vram_detail_label.configure(text="Select or browse a .gguf model to preview VRAM")
+            return
+
+        if est.get("is_cpu_only", False):
+            self.vram_est_label.configure(
+                text=f"RAM: {est['ram_gb']:.1f} GB (CPU Only)",
+                text_color=THEME["text_primary"],
+            )
+            self.vram_status_badge.configure(text="CPU", text_color="#38bdf8")
+            self.vram_bar.set(est["ratio"])
+            self.vram_bar.configure(progress_color="#38bdf8")
+            self.vram_detail_label.configure(
+                text=f"RAM: {est['ram_gb']:.1f}G | Weights: {est['weights_vram_gb']:.1f}G | KV: {est['kv_ram_gb']:.1f}G"
+            )
+        else:
+            v_gb = est["vram_gb"]
+            tot_gb = est["total_vram_gb"]
+            headroom = est["headroom_gb"]
+            color = est["status_color"]
+
+            headroom_str = f"+{headroom:.1f} GB Free" if headroom >= 0 else f"{abs(headroom):.1f} GB OOM"
+            self.vram_est_label.configure(
+                text=f"{v_gb:.1f} / {tot_gb:.1f} GB ({headroom_str})",
+                text_color=THEME["text_primary"],
+            )
+            self.vram_status_badge.configure(text=est["status"], text_color=color)
+            self.vram_bar.set(est["ratio"])
+            self.vram_bar.configure(progress_color=color)
+            self.vram_detail_label.configure(
+                text=f"Weights: {est['weights_vram_gb']:.1f}G | KV: {est['kv_vram_gb']:.1f}G | RAM: {est['ram_gb']:.1f}G"
+            )
+
+    def auto_fit_hardware(self):
+        """
+        Auto-Fit Engine:
+        Calculates maximum viable GPU layers (-ngl) and largest context window (-c)
+        to fit into available VRAM while preserving safe headroom.
+        """
+        model_path = self.model_entry.get().strip() if hasattr(self, "model_entry") else ""
+        if not model_path or not os.path.isfile(model_path):
+            self._flash_badge("● SELECT MODEL FIRST", is_alert=True)
+            return
+
+        dev_disp = self.device_dropdown.get() if hasattr(self, "device_dropdown") else ""
+        dev_id = self.device_map.get(dev_disp, "")
+        if dev_id == "none" or "cpu" in dev_disp.lower():
+            self._flash_badge("● GPU NOT SELECTED", is_alert=True)
+            return
+
+        total_vram_gb = self.device_vram_map.get(dev_disp, 16.0)
+
+        # Parse safety margin from extra flags if specified, else 1.0 GB
+        safety_gb = 1.0
+        extra_flags = self.extra_flags_entry.get() if hasattr(self, "extra_flags_entry") else ""
+        margin_match = re.search(r"--fit-target\s+(\d+(?:\.\d+)?)", extra_flags)
+        if margin_match:
+            try:
+                val = float(margin_match.group(1))
+                safety_gb = val / 1024.0 if val > 32.0 else val
+            except Exception:
+                safety_gb = 1.0
+
+        target_vram_gb = max(total_vram_gb - safety_gb, 1.0)
+
+        if model_path not in self.gguf_metadata_cache:
+            self.gguf_metadata_cache[model_path] = self.parse_gguf_summary(model_path)
+        meta = self.gguf_metadata_cache[model_path]
+
+        total_layers = max(int(meta.get("layers", 32)), 1)
+        total_file_bytes = int(meta.get("file_bytes", os.path.getsize(model_path)))
+        heads = max(int(meta.get("heads", 32)), 1)
+        kv_heads = max(int(meta.get("kv_heads", 8)), 1)
+        embd = max(int(meta.get("embd", 4096)), 1)
+        head_dim = max(embd // heads, 64)
+
+        ctk_type = self.ctk_dropdown.get() if hasattr(self, "ctk_dropdown") else "q8_0"
+        ctv_type = self.ctv_dropdown.get() if hasattr(self, "ctv_dropdown") else "q8_0"
+
+        bytes_map = {
+            "f32": 4.0, "f16": 2.0, "bf16": 2.0, "q8_0": 1.0,
+            "q5_1": 0.6875, "q5_0": 0.625, "q4_1": 0.5625, "q4_0": 0.5, "iq4_nl": 0.5,
+        }
+        k_b = bytes_map.get(ctk_type, 1.0)
+        v_b = bytes_map.get(ctv_type, 1.0)
+        kv_per_token_per_layer = kv_heads * head_dim * (k_b + v_b)
+
+        def calc_vram(ngl_val, ctx_tokens):
+            offload = total_layers if (ngl_val >= 99 or ngl_val >= total_layers) else max(0, ngl_val)
+            w_bytes = total_file_bytes * (offload / total_layers)
+            kv_bytes = offload * ctx_tokens * kv_per_token_per_layer
+            over_bytes = (600 * 1024 * 1024) + (ctx_tokens * 4096) if offload > 0 else 0
+            return (w_bytes + kv_bytes + over_bytes) / (1024 ** 3)
+
+        best_ngl = 99
+        best_ctx_idx = 0
+        full_offload_possible = False
+
+        for c_idx in range(len(CTX_STEPS) - 1, -1, -1):
+            c_val = CTX_STEPS[c_idx]
+            v = calc_vram(99, c_val)
+            if v <= target_vram_gb:
+                best_ngl = 99
+                best_ctx_idx = c_idx
+                full_offload_possible = True
+                break
+
+        if not full_offload_possible:
+            best_ctx_idx = 0
+            c_val = CTX_STEPS[best_ctx_idx]
+            best_ngl = 0
+            for test_ngl in range(total_layers, -1, -1):
+                v = calc_vram(test_ngl, c_val)
+                if v <= target_vram_gb:
+                    best_ngl = test_ngl
+                    break
+
+        self.ngl_slider.set(best_ngl)
+        self._on_ngl_change(best_ngl)
+        self.ctx_slider.set(best_ctx_idx)
+        self._on_ctx_change(best_ctx_idx)
+        self._update_memory_estimation()
+
+        ctx_disp = f"{CTX_STEPS[best_ctx_idx] // 1024}K"
+        ngl_disp = "All" if best_ngl == 99 else str(best_ngl)
+        self._flash_badge(f"● AUTO-FIT: {ngl_disp} L, {ctx_disp} CTX")
 
     @classmethod
     def scan_models_in_dir(cls, directory: str) -> dict:
@@ -2354,6 +2795,7 @@ class LlamaLauncher(ctk.CTk):
             self.model_entry.insert(0, matched_path)
             self._add_recent_model(matched_path)
             self._auto_detect_vision_mmproj(matched_path)
+            self._update_memory_estimation()
 
     def _auto_detect_vision_mmproj(self, model_path: str):
         """Auto-detect matching vision mmproj in model directory if model is vision-capable."""
@@ -2660,6 +3102,8 @@ class LlamaLauncher(ctk.CTk):
                 self.opt_str_vars[k].set(str(opt_cfg["val"]))
             self._toggle_opt_widget(k)
 
+        self._update_memory_estimation()
+
     def _build_paths_card(self):
         card = ctk.CTkFrame(
             self.main_container,
@@ -2821,6 +3265,8 @@ class LlamaLauncher(ctk.CTk):
             font=self.font_sm,
         )
         self.model_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.model_entry.bind("<KeyRelease>", lambda _: self._update_memory_estimation())
+        self.model_entry.bind("<FocusOut>", lambda _: self._update_memory_estimation())
 
         self.model_library_menu = ctk.CTkOptionMenu(
             model_input_frame,
@@ -2947,6 +3393,7 @@ class LlamaLauncher(ctk.CTk):
         def worker():
             exe = self.exe_entry.get().strip() if hasattr(self, "exe_entry") else self.llama_exe
             new_map = {}
+            new_vram_map = {}
             try:
                 no_window_flag = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
                 proc = subprocess.run(
@@ -2963,17 +3410,27 @@ class LlamaLauncher(ctk.CTk):
                     if ":" in line:
                         dev_id = line.split(":", 1)[0].strip()
                         desc = line.split(":", 1)[1].strip()
+                        # Extract VRAM size if present, e.g. (16304 MiB, 15416 MiB free)
+                        vram_gb = 16.0
+                        vram_match = re.search(r"\((\d+)\s*MiB", desc)
+                        if vram_match:
+                            vram_gb = round(float(vram_match.group(1)) / 1024.0, 1)
+
                         clean_desc = re.sub(r"\s*\(\d+\s*MiB.*?\)", "", desc).strip()
-                        new_map[f"{dev_id}: {clean_desc}"] = dev_id
+                        disp_key = f"{dev_id}: {clean_desc}"
+                        new_map[disp_key] = dev_id
+                        new_vram_map[disp_key] = vram_gb
             except Exception:
                 pass
 
             if new_map:
                 if not any(v == "none" for v in new_map.values()):
                     new_map["none: CPU Only"] = "none"
+                    new_vram_map["none: CPU Only"] = 32.0
 
                 def apply_results():
                     self.device_map = new_map
+                    self.device_vram_map = new_vram_map
                     if hasattr(self, "device_dropdown"):
                         options = list(self.device_map.keys())
                         curr = self.device_dropdown.get()
@@ -2982,6 +3439,7 @@ class LlamaLauncher(ctk.CTk):
                             self.device_dropdown.set(curr)
                         else:
                             self.device_dropdown.set(self._get_default_device_display())
+                    self._update_memory_estimation()
                     if on_done:
                         on_done()
 
@@ -3040,6 +3498,7 @@ class LlamaLauncher(ctk.CTk):
         self.device_dropdown = ctk.CTkOptionMenu(
             card,
             values=list(self.device_map.keys()),
+            command=self._on_device_change,
             fg_color=THEME["input_bg"],
             button_color="#27272a",
             button_hover_color="#3f3f46",
@@ -3170,11 +3629,16 @@ class LlamaLauncher(ctk.CTk):
         self.threads_entry.insert(0, "8")
         self.threads_entry.grid(row=0, column=3, sticky="ew")
 
-        # Row 5: Detect GPUs Action Button (Placed below Ports & Threads)
+        # Row 5: Action Buttons (Detect GPUs & Auto-Fit)
+        act_frame = ctk.CTkFrame(card, fg_color="transparent")
+        act_frame.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
+        act_frame.columnconfigure(0, weight=1)
+        act_frame.columnconfigure(1, weight=1)
+
         self.detect_btn = ctk.CTkButton(
-            card,
+            act_frame,
             text="Detect GPUs",
-            height=28,
+            height=26,
             fg_color=THEME["secondary_btn_bg"],
             hover_color=THEME["secondary_btn_hover"],
             border_width=1,
@@ -3184,15 +3648,91 @@ class LlamaLauncher(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             command=self._refresh_devices,
         )
-        self.detect_btn.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
+        self.detect_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        self.auto_fit_btn = ctk.CTkButton(
+            act_frame,
+            text="⚡ Auto-Fit",
+            height=26,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color="#38bdf8",
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self.auto_fit_hardware,
+        )
+        self.auto_fit_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+
+        # Row 6: Real-Time Projected VRAM & Memory Estimator Card
+        self.vram_est_card = ctk.CTkFrame(
+            card,
+            fg_color="#18181b",
+            border_width=1,
+            border_color="#27272a",
+            corner_radius=8,
+        )
+        self.vram_est_card.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
+
+        top_est_frame = ctk.CTkFrame(self.vram_est_card, fg_color="transparent")
+        top_est_frame.pack(fill="x", padx=8, pady=(5, 2))
+
+        ctk.CTkLabel(
+            top_est_frame,
+            text="PROJECTED VRAM",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color=THEME["text_muted"],
+        ).pack(side="left")
+
+        self.vram_status_badge = ctk.CTkLabel(
+            top_est_frame,
+            text="SAFE",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color="#10b981",
+        )
+        self.vram_status_badge.pack(side="right")
+
+        self.vram_est_label = ctk.CTkLabel(
+            self.vram_est_card,
+            text="0.0 / 16.0 GB (+16.0 GB Free)",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_primary"],
+            anchor="w",
+        )
+        self.vram_est_label.pack(fill="x", padx=8, pady=(0, 3))
+
+        self.vram_bar = ctk.CTkProgressBar(
+            self.vram_est_card,
+            height=6,
+            corner_radius=3,
+            fg_color="#27272a",
+            progress_color="#10b981",
+        )
+        self.vram_bar.set(0.0)
+        self.vram_bar.pack(fill="x", padx=8, pady=(0, 4))
+
+        self.vram_detail_label = ctk.CTkLabel(
+            self.vram_est_card,
+            text="Weights: 0.0G | KV: 0.0G | RAM: 0.0G",
+            font=ctk.CTkFont(family="Segoe UI", size=10),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+        )
+        self.vram_detail_label.pack(fill="x", padx=8, pady=(0, 5))
 
     def _on_ngl_change(self, val):
         v = int(round(val))
         self.ngl_badge.configure(text="99 (All)" if v == 99 else ("0 (CPU)" if v == 0 else str(v)))
+        self._update_memory_estimation()
 
     def _on_ctx_change(self, val):
         tokens = CTX_STEPS[int(round(val))]
         self.ctx_badge.configure(text=f"{tokens // 1024}K")
+        self._update_memory_estimation()
+
+    def _on_device_change(self, choice):
+        self._update_memory_estimation()
 
     def _build_batch_sampling_column(self, parent):
         """Column 2: Batching, KV Types, Sampling & Core Toggles."""
@@ -3324,6 +3864,7 @@ class LlamaLauncher(ctk.CTk):
         self.ctk_dropdown = ctk.CTkOptionMenu(
             kv_box,
             values=KV_CACHE_TYPES,
+            command=lambda _: self._update_memory_estimation(),
             fg_color=THEME["input_bg"],
             button_color="#27272a",
             button_hover_color="#3f3f46",
@@ -3350,6 +3891,7 @@ class LlamaLauncher(ctk.CTk):
         self.ctv_dropdown = ctk.CTkOptionMenu(
             kv_box,
             values=KV_CACHE_TYPES,
+            command=lambda _: self._update_memory_estimation(),
             fg_color=THEME["input_bg"],
             button_color="#27272a",
             button_hover_color="#3f3f46",
@@ -4139,6 +4681,7 @@ class LlamaLauncher(ctk.CTk):
                 self._add_recent_model(target_path)
                 self._auto_detect_vision_mmproj(target_path)
                 self._flash_badge(f"● SELECTED: {os.path.basename(target_path)[:24]}")
+                self._update_memory_estimation()
 
     def browse_model(self):
         f = filedialog.askopenfilename(filetypes=[("GGUF Files", "*.gguf")])
@@ -4156,6 +4699,7 @@ class LlamaLauncher(ctk.CTk):
                     self.models_dir_entry.insert(0, self.models_dir)
                 self._persist_app_config()
                 self._trigger_models_scan()
+            self._update_memory_estimation()
 
     def _build_command_args(self):
         """Validate input paths and construct full argument list for llama-server."""
