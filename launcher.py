@@ -2064,6 +2064,11 @@ class LlamaLauncher(ctk.CTk):
         self.last_crash_time = 0
         self.tray_icon = None
 
+        # Live Inference Telemetry State (Phase 2)
+        self._metrics_stop_event = threading.Event()
+        self._metrics_thread = None
+        self._last_metrics_sample = None
+
         # Public Secure Tunneling State
         self.tunnel_manager = TunnelManager(self)
         self.tunnel_dialog = None
@@ -3803,6 +3808,26 @@ class LlamaLauncher(ctk.CTk):
         )
         self.tray_close_chk.pack(side="left", padx=(0, 10))
 
+        # Live Inference Telemetry Strip (Phase 2)
+        self.telemetry_strip = ctk.CTkFrame(
+            self.drawer_bar,
+            fg_color="#18181b",
+            corner_radius=6,
+            border_width=1,
+            border_color="#27272a",
+            height=28,
+        )
+        self.telemetry_strip.pack(side="left", padx=(4, 8), fill="x", expand=True)
+
+        self.telemetry_label = ctk.CTkLabel(
+            self.telemetry_strip,
+            text="⚪ SERVER OFFLINE  |  Prompt: -- t/s  |  Gen: -- t/s  |  Tokens: --  |  Slots: Idle (0%)",
+            font=ctk.CTkFont(family="Consolas", size=10, weight="bold"),
+            text_color=THEME["text_muted"],
+            anchor="center",
+        )
+        self.telemetry_label.pack(fill="both", expand=True, padx=8, pady=3)
+
         # Public Tunnel quick button on the right
         self.tunnel_btn = ctk.CTkButton(
             self.drawer_bar,
@@ -4777,6 +4802,7 @@ class LlamaLauncher(ctk.CTk):
                 text_color=THEME["secondary_btn_text"],
             )
         self._flash_badge("● SERVER RUNNING")
+        self._start_metrics_poller()
         self.after(500, self._poll_server_status)
 
     def stop_server(self):
@@ -4800,6 +4826,7 @@ class LlamaLauncher(ctk.CTk):
                 pass
             self.server_proc = None
 
+        self._stop_metrics_poller()
         self._reset_server_btn_ui()
         self._flash_badge("● SERVER STOPPED")
         self._log_system("[SYSTEM] Server stopped successfully.")
@@ -4837,6 +4864,7 @@ class LlamaLauncher(ctk.CTk):
             exit_code = self.server_proc.poll()
             if exit_code is not None:
                 self.server_proc = None
+                self._stop_metrics_poller()
                 self._reset_server_btn_ui()
                 self._flash_badge("● SERVER OFFLINE")
 
@@ -4866,6 +4894,190 @@ class LlamaLauncher(ctk.CTk):
         if not self.manual_stop and not self.is_server_running():
             self._log_system("[WATCHDOG] 🚀 Triggering auto-restart now...")
             self.start_server()
+
+    # =========================================================================
+    # Phase 2: Live Inference Dashboard & Metrics Polling Engine
+    # =========================================================================
+    @staticmethod
+    def parse_prometheus_metrics(raw_text: str) -> dict:
+        """Parse Prometheus key-value telemetry text from llama-server /metrics endpoint."""
+        data = {}
+        for line in raw_text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                key = parts[0]
+                try:
+                    val = float(parts[1])
+                    data[key] = val
+                except ValueError:
+                    pass
+        return data
+
+    def _start_metrics_poller(self):
+        """Spin up background daemon thread to query /metrics and /slots endpoints continuously."""
+        self._stop_metrics_poller()
+        self._metrics_stop_event.clear()
+        self._last_metrics_sample = None
+
+        port = self.port_entry.get().strip() if hasattr(self, "port_entry") else "8082"
+        metrics_url = f"http://127.0.0.1:{port}/metrics"
+        slots_url = f"http://127.0.0.1:{port}/slots"
+
+        def poller():
+            # Initial grace period while llama-server boots and binds HTTP port
+            time.sleep(1.5)
+            while not self._metrics_stop_event.is_set():
+                metrics_data = None
+                slots_data = None
+
+                # 1. Fetch Prometheus /metrics
+                try:
+                    req = urllib.request.Request(metrics_url, headers={"User-Agent": "LLauncher-Telemetry"})
+                    with urllib.request.urlopen(req, timeout=1.2) as resp:
+                        if resp.status == 200:
+                            content = resp.read().decode("utf-8", errors="replace")
+                            metrics_data = self.parse_prometheus_metrics(content)
+                except Exception:
+                    pass
+
+                # 2. Fetch JSON /slots
+                try:
+                    req_slots = urllib.request.Request(slots_url, headers={"User-Agent": "LLauncher-Telemetry"})
+                    with urllib.request.urlopen(req_slots, timeout=1.2) as resp:
+                        if resp.status == 200:
+                            content = resp.read().decode("utf-8", errors="replace")
+                            slots_data = json.loads(content)
+                except Exception:
+                    pass
+
+                if self._metrics_stop_event.is_set():
+                    break
+
+                # 3. Compute telemetry metrics
+                prompt_ts = None
+                gen_ts = None
+                total_tokens = None
+                is_active = False
+
+                if metrics_data:
+                    # Preferred Prometheus gauge names from llama.cpp server
+                    prompt_tokens = metrics_data.get("llamacpp:prompt_tokens_total") or metrics_data.get("prompt_tokens_total")
+                    prompt_seconds = metrics_data.get("llamacpp:prompt_seconds_total") or metrics_data.get("prompt_seconds_total")
+                    tokens_predicted = metrics_data.get("llamacpp:tokens_predicted_total") or metrics_data.get("tokens_predicted_total")
+                    tokens_seconds = metrics_data.get("llamacpp:tokens_seconds_total") or metrics_data.get("tokens_seconds_total")
+
+                    now = time.time()
+                    if self._last_metrics_sample is not None and prompt_tokens is not None and tokens_predicted is not None:
+                        last_t, last_p_toks, last_p_sec, last_g_toks, last_g_sec = self._last_metrics_sample
+                        delta_p_toks = prompt_tokens - last_p_toks
+                        delta_p_sec = (prompt_seconds - last_p_sec) if prompt_seconds is not None else (now - last_t)
+                        delta_g_toks = tokens_predicted - last_g_toks
+                        delta_g_sec = (tokens_seconds - last_g_sec) if tokens_seconds is not None else (now - last_t)
+
+                        if delta_p_toks > 0 and delta_p_sec > 0.05:
+                            prompt_ts = delta_p_toks / delta_p_sec
+                        if delta_g_toks > 0 and delta_g_sec > 0.05:
+                            gen_ts = delta_g_toks / delta_g_sec
+
+                    # Fallback to cumulative average if instantaneous window is 0
+                    if prompt_ts is None and prompt_tokens and prompt_seconds and prompt_seconds > 0:
+                        prompt_ts = prompt_tokens / prompt_seconds
+                    if gen_ts is None and tokens_predicted and tokens_seconds and tokens_seconds > 0:
+                        gen_ts = tokens_predicted / tokens_seconds
+
+                    if prompt_tokens is not None or tokens_predicted is not None:
+                        total_tokens = int((prompt_tokens or 0) + (tokens_predicted or 0))
+
+                    if prompt_tokens is not None and tokens_predicted is not None:
+                        self._last_metrics_sample = (
+                            now,
+                            prompt_tokens,
+                            prompt_seconds or 0.0,
+                            tokens_predicted,
+                            tokens_seconds or 0.0,
+                        )
+
+                # 4. Slot saturation & activity state
+                slot_info = "Idle (0%)"
+                if isinstance(slots_data, list) and len(slots_data) > 0:
+                    total_slots = len(slots_data)
+                    busy_slots = 0
+                    total_ctx_used = 0
+                    max_ctx_total = 0
+                    for s in slots_data:
+                        state = s.get("state", 0) # 0=idle, 1=processing
+                        if state != 0:
+                            busy_slots += 1
+                            is_active = True
+                        n_ctx = s.get("n_ctx", 0)
+                        n_past = s.get("n_past", 0)
+                        max_ctx_total += n_ctx
+                        total_ctx_used += n_past
+
+                    if max_ctx_total > 0:
+                        sat_pct = int(round((total_ctx_used / max_ctx_total) * 100))
+                    elif total_slots > 0:
+                        sat_pct = int(round((busy_slots / total_slots) * 100))
+                    else:
+                        sat_pct = 0
+
+                    if busy_slots > 0:
+                        slot_info = f"Busy {busy_slots}/{total_slots} ({sat_pct}%)"
+                    else:
+                        slot_info = f"Idle ({sat_pct}%)"
+
+                # 5. Dispatch telemetry UI update safely on main GUI thread
+                self.after(
+                    0,
+                    self._update_telemetry_ui,
+                    prompt_ts,
+                    gen_ts,
+                    total_tokens,
+                    slot_info,
+                    is_active,
+                )
+
+                time.sleep(1.2)
+
+        self._metrics_thread = threading.Thread(target=poller, daemon=True)
+        self._metrics_thread.start()
+
+    def _stop_metrics_poller(self):
+        """Halt background telemetry metrics polling thread and reset status bar."""
+        self._metrics_stop_event.set()
+        self._last_metrics_sample = None
+        self._metrics_thread = None
+        if hasattr(self, "telemetry_label"):
+            self.telemetry_label.configure(
+                text="⚪ SERVER OFFLINE  |  Prompt: -- t/s  |  Gen: -- t/s  |  Tokens: --  |  Slots: Idle (0%)",
+                text_color=THEME["text_muted"],
+            )
+
+    def _update_telemetry_ui(self, prompt_ts, gen_ts, total_tokens, slot_info, is_active):
+        """Update the live telemetry dashboard strip with colored metrics."""
+        if not hasattr(self, "telemetry_label"):
+            return
+
+        if not self.is_server_running():
+            self._stop_metrics_poller()
+            return
+
+        pts_str = f"{prompt_ts:.1f} t/s" if prompt_ts is not None else "-- t/s"
+        gts_str = f"{gen_ts:.1f} t/s" if gen_ts is not None else "-- t/s"
+        tok_str = f"{total_tokens:,}" if total_tokens is not None else "--"
+
+        if is_active:
+            status_dot = "⚡ GENERATING"
+            color = "#38bdf8" # vibrant cyan / active
+        else:
+            status_dot = "🟢 ONLINE"
+            color = "#a1a1aa" # sleek neutral
+
+        display_text = f"{status_dot}  |  Prompt: {pts_str}  |  Gen: {gts_str}  |  Tokens: {tok_str}  |  Slots: {slot_info}"
+        self.telemetry_label.configure(text=display_text, text_color=color)
 
     def _init_tray(self):
         """Initialize Windows notification tray icon and context menu."""
