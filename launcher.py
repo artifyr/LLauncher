@@ -368,24 +368,28 @@ class ClientConfigDialog(ctk.CTkToplevel):
 
         if hasattr(self.master, "tunnel_manager") and self.master.tunnel_manager and self.master.tunnel_manager.is_running():
             tunnel_url = self.master.tunnel_manager.public_url
-            t_banner = ctk.CTkFrame(container, fg_color="#064e3b", corner_radius=6, border_width=1, border_color="#10b981")
+            t_banner = ctk.CTkFrame(container, fg_color=THEME["card_bg"], corner_radius=8, border_width=1, border_color="#3f3f46")
             t_banner.pack(fill="x", pady=(0, 10))
             ctk.CTkLabel(
                 t_banner,
                 text=f"🌐 Public HTTPS Endpoint: {tunnel_url}/v1",
                 font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-                text_color="#ecfdf5",
-            ).pack(side="left", padx=10, pady=4)
+                text_color="#4ade80",
+            ).pack(side="left", padx=12, pady=6)
             ctk.CTkButton(
                 t_banner,
                 text="📋 Copy Public API",
-                width=120,
-                height=24,
-                fg_color="#047857",
-                hover_color="#059669",
+                width=130,
+                height=26,
+                fg_color=THEME["secondary_btn_bg"],
+                hover_color=THEME["secondary_btn_hover"],
+                border_width=1,
+                border_color=THEME["secondary_btn_border"],
+                text_color=THEME["secondary_btn_text"],
                 font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                corner_radius=6,
                 command=lambda u=f"{tunnel_url}/v1": self._copy_to_clipboard(u, "Public Tunnel Endpoint"),
-            ).pack(side="right", padx=6, pady=4)
+            ).pack(side="right", padx=8, pady=4)
 
         self.tabview = ctk.CTkTabview(
             container,
@@ -1433,17 +1437,23 @@ class TunnelDialog(ctk.CTkToplevel):
             text_color=THEME["text_muted"],
         ).pack(anchor="w")
 
-        self.status_pill = ctk.CTkLabel(
+        status_frame = ctk.CTkFrame(
             header,
-            text="● OFFLINE",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#71717a",
-            fg_color="#18181b",
-            corner_radius=12,
-            padx=12,
-            pady=4,
+            fg_color=THEME["badge_bg"],
+            corner_radius=14,
+            border_width=1,
+            border_color=THEME["badge_border"],
         )
-        self.status_pill.pack(side="right")
+        status_frame.pack(side="right")
+        self.status_pill = ctk.CTkLabel(
+            status_frame,
+            text="● OFFLINE",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color="#71717a",
+            padx=10,
+            pady=3,
+        )
+        self.status_pill.pack()
 
         # Configuration Card
         cfg_card = ctk.CTkFrame(
@@ -1476,12 +1486,16 @@ class TunnelDialog(ctk.CTkToplevel):
             unselected_color="#18181b",
             unselected_hover_color="#27272a",
             text_color=THEME["text_primary"],
+            border_width=1,
+            corner_radius=6,
             command=self._on_provider_changed,
             height=28,
         )
         current_provider = self.tunnel_manager.provider if self.tunnel_manager else "ngrok"
         self.provider_seg.set("Ngrok" if current_provider == "ngrok" else "Cloudflare Tunnel")
         self.provider_seg.grid(row=0, column=1, columnspan=2, padx=(0, 14), pady=(12, 6), sticky="ew")
+        self._update_provider_seg_colors()
+        self.after(20, self._update_provider_seg_colors)
 
         # Row 1: Target Port
         ctk.CTkLabel(
@@ -1596,13 +1610,13 @@ class TunnelDialog(ctk.CTkToplevel):
             action_bar,
             text="🚀  Start Secure Tunnel",
             height=36,
-            fg_color="#047857",
-            hover_color="#059669",
+            fg_color=THEME["primary_btn_bg"],
+            hover_color=THEME["primary_btn_hover"],
             border_width=1,
-            border_color="#10b981",
-            text_color="#ffffff",
+            border_color=THEME["primary_btn_border"],
+            text_color=THEME["primary_btn_text"],
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            corner_radius=6,
+            corner_radius=8,
             command=self._toggle_tunnel,
         )
         self.action_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -1617,8 +1631,8 @@ class TunnelDialog(ctk.CTkToplevel):
             border_width=1,
             border_color=THEME["secondary_btn_border"],
             text_color=THEME["secondary_btn_text"],
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=8,
             command=self._on_helper_action,
         )
         self.helper_action_btn.pack(side="right")
@@ -1626,10 +1640,10 @@ class TunnelDialog(ctk.CTkToplevel):
         # Live Public Connection Card
         self.url_card = ctk.CTkFrame(
             container,
-            fg_color="#091410",
+            fg_color=THEME["card_bg"],
             corner_radius=8,
             border_width=1,
-            border_color="#10b981",
+            border_color=THEME["card_border"],
         )
         self.url_card.pack(fill="x", pady=(0, 10))
         self.url_card.columnconfigure(1, weight=1)
@@ -1639,7 +1653,7 @@ class TunnelDialog(ctk.CTkToplevel):
             self.url_card,
             text="Public URL",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#6ee7b7",
+            text_color=THEME["text_secondary"],
             width=110,
             anchor="w",
         ).grid(row=0, column=0, padx=(14, 8), pady=(12, 4), sticky="w")
@@ -1647,10 +1661,10 @@ class TunnelDialog(ctk.CTkToplevel):
         self.url_entry = ctk.CTkEntry(
             self.url_card,
             fg_color=THEME["input_bg"],
-            border_color="#065f46",
+            border_color=THEME["input_border"],
             border_width=1,
-            text_color="#4ade80",
-            font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
+            text_color=THEME["text_primary"],
+            font=ctk.CTkFont(family="Consolas", size=11),
             corner_radius=6,
             height=28,
         )
@@ -1664,11 +1678,11 @@ class TunnelDialog(ctk.CTkToplevel):
             text="📋 Copy",
             width=65,
             height=28,
-            fg_color="#064e3b",
-            hover_color="#065f46",
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
             border_width=1,
-            border_color="#059669",
-            text_color="#ecfdf5",
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             corner_radius=6,
             command=self._copy_public_url,
@@ -1680,11 +1694,11 @@ class TunnelDialog(ctk.CTkToplevel):
             text="🌐 Open",
             width=65,
             height=28,
-            fg_color="#064e3b",
-            hover_color="#065f46",
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
             border_width=1,
-            border_color="#059669",
-            text_color="#ecfdf5",
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             corner_radius=6,
             command=self._open_public_url,
@@ -1696,7 +1710,7 @@ class TunnelDialog(ctk.CTkToplevel):
             self.url_card,
             text="OpenAI API Base",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#6ee7b7",
+            text_color=THEME["text_secondary"],
             width=110,
             anchor="w",
         ).grid(row=1, column=0, padx=(14, 8), pady=(4, 12), sticky="w")
@@ -1704,10 +1718,10 @@ class TunnelDialog(ctk.CTkToplevel):
         self.api_url_entry = ctk.CTkEntry(
             self.url_card,
             fg_color=THEME["input_bg"],
-            border_color="#065f46",
+            border_color=THEME["input_border"],
             border_width=1,
-            text_color="#4ade80",
-            font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
+            text_color=THEME["text_primary"],
+            font=ctk.CTkFont(family="Consolas", size=11),
             corner_radius=6,
             height=28,
         )
@@ -1718,11 +1732,11 @@ class TunnelDialog(ctk.CTkToplevel):
             text="📋 Copy API",
             width=134,
             height=28,
-            fg_color="#064e3b",
-            hover_color="#065f46",
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
             border_width=1,
-            border_color="#059669",
-            text_color="#ecfdf5",
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             corner_radius=6,
             command=self._copy_api_url,
@@ -1755,10 +1769,10 @@ class TunnelDialog(ctk.CTkToplevel):
         self.diag_box = ctk.CTkTextbox(
             container,
             height=110,
-            fg_color=THEME["input_bg"],
-            border_color=THEME["input_border"],
+            fg_color="#0e0e11",
+            border_color="#222226",
             border_width=1,
-            text_color=THEME["text_secondary"],
+            text_color="#e4e4e7",
             font=ctk.CTkFont(family="Consolas", size=10),
             corner_radius=6,
             wrap="none",
@@ -1767,7 +1781,22 @@ class TunnelDialog(ctk.CTkToplevel):
 
         self._refresh_detection()
 
+    def _update_provider_seg_colors(self, selected_choice=None):
+        """Ensure active provider tab has dark readable text and inactive has white bold text."""
+        if not hasattr(self, "provider_seg"):
+            return
+        current = selected_choice or self.provider_seg.get()
+        if hasattr(self.provider_seg, "_buttons_dict"):
+            for name, btn in self.provider_seg._buttons_dict.items():
+                btn.configure(font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"))
+                if name == current:
+                    btn.configure(text_color=THEME["primary_btn_text"])
+                else:
+                    btn.configure(text_color="#ffffff")
+
     def _on_provider_changed(self, choice: str):
+        self._update_provider_seg_colors(choice)
+        self.after(10, lambda: self._update_provider_seg_colors(choice))
         self._refresh_detection()
 
     def _refresh_detection(self):
@@ -1851,55 +1880,79 @@ class TunnelDialog(ctk.CTkToplevel):
             self.status_pill.configure(text="● TUNNEL ONLINE", text_color="#4ade80")
             self.action_btn.configure(
                 text="🛑  Stop Secure Tunnel",
-                fg_color="#991b1b",
-                hover_color="#b91c1c",
-                border_color="#ef4444",
+                fg_color="#7f1d1d",
+                hover_color="#991b1b",
+                border_color="#dc2626",
+                text_color="#ffffff",
                 state="normal"
             )
-            self.url_card.configure(fg_color="#091410", border_color="#10b981")
+            self.url_card.configure(fg_color=THEME["card_bg"], border_color="#3f3f46")
             self.url_entry.delete(0, "end")
             self.url_entry.insert(0, tm.public_url)
+            self.url_entry.configure(text_color="#4ade80")
             self.api_url_entry.delete(0, "end")
             self.api_url_entry.insert(0, f"{tm.public_url}/v1")
+            self.api_url_entry.configure(text_color="#4ade80")
+            self.copy_url_btn.configure(state="normal")
+            self.open_url_btn.configure(state="normal")
+            self.copy_api_btn.configure(state="normal")
         elif tm.status == "starting":
             self.status_pill.configure(text="● CONNECTING...", text_color="#facc15")
             self.action_btn.configure(
                 text="⏳  Establishing Tunnel...",
-                fg_color="#854d0e",
-                hover_color="#713f12",
-                border_color="#eab308",
+                fg_color="#27272a",
+                hover_color="#27272a",
+                border_color="#3f3f46",
+                text_color="#a1a1aa",
                 state="disabled"
             )
+            self.url_card.configure(fg_color=THEME["card_bg"], border_color=THEME["card_border"])
             self.url_entry.delete(0, "end")
             self.url_entry.insert(0, "Waiting for public URL...")
+            self.url_entry.configure(text_color=THEME["text_muted"])
             self.api_url_entry.delete(0, "end")
             self.api_url_entry.insert(0, "Waiting for endpoint...")
+            self.api_url_entry.configure(text_color=THEME["text_muted"])
+            self.copy_url_btn.configure(state="disabled")
+            self.open_url_btn.configure(state="disabled")
+            self.copy_api_btn.configure(state="disabled")
         elif tm.status == "error":
             self.status_pill.configure(text="● ERROR", text_color="#f87171")
             self.action_btn.configure(
                 text="🚀  Retry Start Tunnel",
-                fg_color="#047857",
-                hover_color="#059669",
-                border_color="#10b981",
+                fg_color=THEME["primary_btn_bg"],
+                hover_color=THEME["primary_btn_hover"],
+                border_color=THEME["primary_btn_border"],
+                text_color=THEME["primary_btn_text"],
                 state="normal"
             )
             self.url_card.configure(fg_color=THEME["card_bg"], border_color=THEME["card_border"])
             self.url_entry.delete(0, "end")
             self.url_entry.insert(0, tm.error_message or "Tunnel failed to start")
+            self.url_entry.configure(text_color="#f87171")
             self.api_url_entry.delete(0, "end")
             self.api_url_entry.insert(0, "")
+            self.copy_url_btn.configure(state="disabled")
+            self.open_url_btn.configure(state="disabled")
+            self.copy_api_btn.configure(state="disabled")
         else:
             self.status_pill.configure(text="● OFFLINE", text_color="#71717a")
             self.action_btn.configure(
                 text="🚀  Start Secure Tunnel",
-                fg_color="#047857",
-                hover_color="#059669",
-                border_color="#10b981",
+                fg_color=THEME["primary_btn_bg"],
+                hover_color=THEME["primary_btn_hover"],
+                border_color=THEME["primary_btn_border"],
+                text_color=THEME["primary_btn_text"],
                 state="normal"
             )
             self.url_card.configure(fg_color=THEME["card_bg"], border_color=THEME["card_border"])
             self.url_entry.delete(0, "end")
+            self.url_entry.configure(text_color=THEME["text_primary"])
             self.api_url_entry.delete(0, "end")
+            self.api_url_entry.configure(text_color=THEME["text_primary"])
+            self.copy_url_btn.configure(state="normal")
+            self.open_url_btn.configure(state="normal")
+            self.copy_api_btn.configure(state="normal")
 
     def _copy_public_url(self):
         url = self.url_entry.get().strip()
@@ -4503,19 +4556,19 @@ class LlamaLauncher(ctk.CTk):
             if tm.status == "running":
                 self.tunnel_btn.configure(
                     text="🟢  Tunnel Active",
-                    fg_color="#065f46",
-                    hover_color="#047857",
-                    border_color="#10b981",
-                    text_color="#ecfdf5",
+                    fg_color="#18181b",
+                    hover_color="#27272a",
+                    border_color="#4ade80",
+                    text_color="#4ade80",
                 )
                 self._flash_badge("● SECURE TUNNEL ONLINE")
             elif tm.status == "starting":
                 self.tunnel_btn.configure(
                     text="⏳  Tunnel Starting...",
-                    fg_color="#854d0e",
-                    hover_color="#713f12",
-                    border_color="#eab308",
-                    text_color="#fef08a",
+                    fg_color="#18181b",
+                    hover_color="#27272a",
+                    border_color="#facc15",
+                    text_color="#facc15",
                 )
             else:
                 self.tunnel_btn.configure(
