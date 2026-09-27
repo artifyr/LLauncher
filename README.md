@@ -14,16 +14,24 @@ Lightweight hardware tuner, profile manager, and local inference controller for 
 
 ## Overview
 
-**Llauncher** is a native Windows controller for local Large Language Model (LLM) instances powered by `llama.cpp`. Built with CustomTkinter and Windows 11 Mica material, Llauncher provides a zero-latency interface to configure hardware offloading, context windows, KV cache quantization, sampling parameters, vision projectors, and persistent profiles without manual command-line overhead. Supports AMD Vulkan, NVIDIA CUDA, and CPU-only inference.
+**Llauncher** is a native, standalone Windows controller for local Large Language Model (LLM) instances powered by `llama.cpp`. Built with CustomTkinter and Windows 11 Mica material, Llauncher provides a zero-latency interface to configure hardware offloading, context windows, KV cache quantization, sampling parameters, vision projectors, and persistent profiles without manual command-line overhead. Supports AMD Vulkan, NVIDIA CUDA, and CPU-only inference.
+
+> [!NOTE]
+> **Zero Installation Required**: Llauncher is completely portable. Simply download `LLauncher.exe`, run it anywhere, and you're ready to go—no installer, no dependencies, and no background services.
 
 ---
 
 ## Core Capabilities
 
+- **Zero-Install Standalone Portability**: Completely self-contained executable with zero setup or runtime installer needed.
 - **Windows 11 Mica Interface**: Native dark-mode styling with translucent Mica material and zero launch flicker.
+- **Hugging Face GGUF Downloader**: Search repos, explore quantizations with file sizes, and perform chunked resumable downloads directly into your configured Models folder.
+- **llama.cpp Binary Updater**: One-click in-app updater that checks GitHub releases, matches your GPU backend (Vulkan/CUDA/CPU), and extracts new binaries to `bin/`.
+- **Pre-Launch VRAM Memory Estimator & Auto-Fit**: Real-time projected VRAM and RAM safety meters with a one-click **⚡ Auto-Fit** button to maximize layer offload and context window without OOM risk.
+- **Live Inference Telemetry Dashboard**: Real-time status bar streaming prompt eval speed (tokens/sec), generation speed (tokens/sec), total token counters, and slot saturation.
 - **Instant Secure Public Tunneling**: Built-in manager for Ngrok and Cloudflare Quick Tunnel (`cloudflared`) to expose `llama-server` over public HTTPS for mobile devices, remote web UIs, and external APIs with zero port forwarding.
 - **Context Shift & Auto-Compaction**: Continuous sliding context (`--ctx-shift`) to prevent token-overflow halts, plus automated KV cache defragmentation (`--defrag-thold`).
-- **Model Library & Vision Auto-Detect**: 15-model history with fast switching and automatic `mmproj` vision attachment.
+- **Model Library & Vision Auto-Detect**: 15-model history with fast switching, multi-part GGUF split detection (`00001-of-00004`), and automatic `mmproj` vision attachment.
 - **System Tray Integration**: Background tray minimization with full right-click control menu.
 - **Embedded Log Console**: Expandable drawer streaming real-time stdout/stderr with regex/keyword filter, auto-scroll, and copy.
 - **Auto-Restart Watchdog**: Background watchdog restarting the server within 2 seconds of a crash (5-attempt circuit breaker).
@@ -88,9 +96,9 @@ Lightweight hardware tuner, profile manager, and local inference controller for 
 
 ## Quickstart (No Python Required)
 
-1. **Download LLauncher**: Download `LLauncher.exe` from [Releases](https://github.com/artifyr/LLauncher/releases) (or grab `dist/LLauncher.exe`).
-2. **Download llama.cpp (`llama-server.exe`)**: Grab pre-built Windows binaries matching your GPU (`vulkan`, `cuda`, or `cpu`) from [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) and extract them.
-3. **Download a GGUF Model**: Download any `.gguf` quantized model from Hugging Face.
+1. **Download LLauncher**: Download `LLauncher.exe` from [Releases](https://github.com/artifyr/LLauncher/releases) (or grab `dist/LLauncher.exe`). **No installation required**—it runs immediately out of the box.
+2. **Download llama.cpp (`llama-server.exe`)**: Grab pre-built Windows binaries matching your GPU (`vulkan`, `cuda`, or `cpu`) from [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) and extract them (or use the in-app **🔄 Update** button).
+3. **Download a GGUF Model**: Download any `.gguf` quantized model (or use the built-in **⬇ HF Models** downloader).
 4. **Launch**: Open `LLauncher.exe`, select your `llama-server.exe` and model file, then click **Start Model Server**.
 
 ---
@@ -159,5 +167,6 @@ LLauncher/
 
 ## License
 
-This project is open-source under the [MIT License](LICENSE).
+This project is open-source under the [GNU General Public License v3.0 (GPL-3.0)](LICENSE).
+
 
