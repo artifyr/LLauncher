@@ -3822,8 +3822,8 @@ class LlamaLauncher(ctk.CTk):
         self.telemetry_label = ctk.CTkLabel(
             self.telemetry_strip,
             text="⚪ SERVER OFFLINE  |  Prompt: -- t/s  |  Gen: -- t/s  |  Tokens: --  |  Slots: Idle (0%)",
-            font=ctk.CTkFont(family="Consolas", size=10, weight="bold"),
-            text_color=THEME["text_muted"],
+            font=ctk.CTkFont(family="Consolas", size=12, weight="bold"),
+            text_color="#ffffff",
             anchor="center",
         )
         self.telemetry_label.pack(fill="both", expand=True, padx=8, pady=3)
@@ -5053,7 +5053,7 @@ class LlamaLauncher(ctk.CTk):
         if hasattr(self, "telemetry_label"):
             self.telemetry_label.configure(
                 text="⚪ SERVER OFFLINE  |  Prompt: -- t/s  |  Gen: -- t/s  |  Tokens: --  |  Slots: Idle (0%)",
-                text_color=THEME["text_muted"],
+                text_color="#ffffff",
             )
 
     def _update_telemetry_ui(self, prompt_ts, gen_ts, total_tokens, slot_info, is_active):
@@ -5071,13 +5071,11 @@ class LlamaLauncher(ctk.CTk):
 
         if is_active:
             status_dot = "⚡ GENERATING"
-            color = "#38bdf8" # vibrant cyan / active
         else:
             status_dot = "🟢 ONLINE"
-            color = "#a1a1aa" # sleek neutral
 
         display_text = f"{status_dot}  |  Prompt: {pts_str}  |  Gen: {gts_str}  |  Tokens: {tok_str}  |  Slots: {slot_info}"
-        self.telemetry_label.configure(text=display_text, text_color=color)
+        self.telemetry_label.configure(text=display_text, text_color="#ffffff")
 
     def _init_tray(self):
         """Initialize Windows notification tray icon and context menu."""
