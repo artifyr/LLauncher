@@ -4,6 +4,7 @@ import re
 import time
 import json
 import queue
+import shutil
 import ctypes
 import datetime
 import subprocess
@@ -143,6 +144,8 @@ DEFAULT_PROFILES = [
             "parallel": {"enabled": False, "val": "1"},
             "cache_ram": {"enabled": True, "val": "8192"},
             "cpu_moe": {"enabled": False, "val": "16"},
+            "ctx_shift": {"enabled": False, "val": "on"},
+            "defrag_thold": {"enabled": False, "val": "0.1"},
         },
     },
     {
@@ -168,6 +171,8 @@ DEFAULT_PROFILES = [
             "parallel": {"enabled": False, "val": "1"},
             "cache_ram": {"enabled": False, "val": "8192"},
             "cpu_moe": {"enabled": False, "val": "16"},
+            "ctx_shift": {"enabled": False, "val": "on"},
+            "defrag_thold": {"enabled": False, "val": "0.1"},
         },
     },
     {
@@ -193,6 +198,8 @@ DEFAULT_PROFILES = [
             "parallel": {"enabled": True, "val": "1"},
             "cache_ram": {"enabled": True, "val": "8192"},
             "cpu_moe": {"enabled": False, "val": "16"},
+            "ctx_shift": {"enabled": True, "val": "on"},
+            "defrag_thold": {"enabled": True, "val": "0.1"},
         },
     },
 ]
@@ -357,7 +364,28 @@ class ClientConfigDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color=THEME["text_secondary"],
             anchor="w",
-        ).pack(fill="x", pady=(0, 10))
+        ).pack(fill="x", pady=(0, 6))
+
+        if hasattr(self.master, "tunnel_manager") and self.master.tunnel_manager and self.master.tunnel_manager.is_running():
+            tunnel_url = self.master.tunnel_manager.public_url
+            t_banner = ctk.CTkFrame(container, fg_color="#064e3b", corner_radius=6, border_width=1, border_color="#10b981")
+            t_banner.pack(fill="x", pady=(0, 10))
+            ctk.CTkLabel(
+                t_banner,
+                text=f"🌐 Public HTTPS Endpoint: {tunnel_url}/v1",
+                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                text_color="#ecfdf5",
+            ).pack(side="left", padx=10, pady=4)
+            ctk.CTkButton(
+                t_banner,
+                text="📋 Copy Public API",
+                width=120,
+                height=24,
+                fg_color="#047857",
+                hover_color="#059669",
+                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                command=lambda u=f"{tunnel_url}/v1": self._copy_to_clipboard(u, "Public Tunnel Endpoint"),
+            ).pack(side="right", padx=6, pady=4)
 
         self.tabview = ctk.CTkTabview(
             container,
@@ -949,6 +977,8 @@ STRICT LLAUNCHER COMPATIBILITY RULES & CONSTRAINTS:
    - fit_target: Margin in MiB to leave free on the GPU (e.g. 256, 512, 768, 1024, 1536).
    - cache_reuse: Number of tokens to reuse in KV cache (typically 128 or 256).
    - cache_ram: Host RAM cache in MiB (e.g. 8192 or 16384).
+   - ctx_shift: Enable continuous context sliding when context limit is reached ("enabled": true/false).
+   - defrag_thold: KV cache memory defragmentation threshold ("enabled": true/false, "value": "0.1").
 
 OUTPUT FORMAT:
 Output ONLY the raw PowerShell script formatted exactly like the template below. Do not wrap in conversational text but, wrap it in a codeblock.
@@ -987,7 +1017,9 @@ $serverArgs = @(
     # "--fit-target", "<mib_margin>",
     # "--cache-reuse", "<tokens>",
     # "--cache-ram", "<mib_ram>",
-    # "--n-cpu-moe", "<expert_layers>"
+    # "--n-cpu-moe", "<expert_layers>",
+    # "--ctx-shift",
+    # "--defrag-thold", "0.1"
 )
 
 Write-Host "Launching llama-server with [Profile Name]..." -ForegroundColor Cyan
@@ -1044,6 +1076,14 @@ Write-Host "Launching llama-server with [Profile Name]..." -ForegroundColor Cyan
 #     "cpu_moe": {{
 #       "enabled": <true_or_false>,
 #       "value": "<moe_layers>"
+#     }},
+#     "ctx_shift": {{
+#       "enabled": <true_or_false>,
+#       "value": "on"
+#     }},
+#     "defrag_thold": {{
+#       "enabled": <true_or_false>,
+#       "value": "0.1"
 #     }}
 #   }}
 # }}
@@ -1072,13 +1112,839 @@ Write-Host "Launching llama-server with [Profile Name]..." -ForegroundColor Cyan
             pass
 
 
+class TunnelManager:
+    """Manages background tunnel processes (Ngrok / Cloudflare Quick Tunnel) to expose llama-server securely."""
+
+    def __init__(self, app=None):
+        self.app = app
+        self.proc = None
+        self.provider = "ngrok"  # "ngrok" or "cloudflare"
+        self.public_url = ""
+        self.status = "stopped"  # "stopped", "starting", "running", "error"
+        self.error_message = ""
+        self.log_lines = []
+        self.on_update_callbacks = []
+
+    def register_callback(self, cb):
+        if cb not in self.on_update_callbacks:
+            self.on_update_callbacks.append(cb)
+
+    def unregister_callback(self, cb):
+        if cb in self.on_update_callbacks:
+            self.on_update_callbacks.remove(cb)
+
+    def _notify(self):
+        for cb in list(self.on_update_callbacks):
+            try:
+                cb(self)
+            except Exception:
+                pass
+
+    @staticmethod
+    def find_ngrok(custom_path: str = "") -> str:
+        if custom_path and os.path.isfile(custom_path):
+            return custom_path
+        which = shutil.which("ngrok") or shutil.which("ngrok.exe")
+        if which:
+            return which
+        candidates = [
+            r"D:\ngrok\ngrok.exe",
+            os.path.expanduser(r"~\scoop\shims\ngrok.exe"),
+            r"C:\Program Files\ngrok\ngrok.exe",
+            r"C:\ngrok\ngrok.exe",
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        return ""
+
+    @staticmethod
+    def find_cloudflared(custom_path: str = "") -> str:
+        if custom_path and os.path.isfile(custom_path):
+            return custom_path
+        which = shutil.which("cloudflared") or shutil.which("cloudflared.exe")
+        if which:
+            return which
+        candidates = [
+            r"C:\Program Files\cloudflared\cloudflared.exe",
+            os.path.expanduser(r"~\scoop\shims\cloudflared.exe"),
+            r"C:\cloudflared\cloudflared.exe",
+            r"D:\cloudflared\cloudflared.exe",
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        return ""
+
+    def start_tunnel(self, provider: str, port: int, custom_bin: str = "", auth_token: str = ""):
+        self.stop_tunnel()
+        self.provider = provider
+        self.status = "starting"
+        self.public_url = ""
+        self.error_message = ""
+        self.log_lines = []
+        self._notify()
+
+        def worker():
+            no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            if provider == "ngrok":
+                bin_path = self.find_ngrok(custom_bin)
+                if not bin_path:
+                    self.status = "error"
+                    self.error_message = "ngrok.exe not found on system. Install ngrok or browse for ngrok.exe."
+                    self.log_lines.append(f"[ERROR] {self.error_message}")
+                    self._notify()
+                    return
+
+                if auth_token and auth_token.strip():
+                    try:
+                        subprocess.run(
+                            [bin_path, "config", "add-authtoken", auth_token.strip()],
+                            capture_output=True,
+                            text=True,
+                            creationflags=no_window,
+                            timeout=5,
+                        )
+                        self.log_lines.append("[INFO] Ngrok authtoken configured successfully.")
+                    except Exception as e:
+                        self.log_lines.append(f"[WARN] Failed configuring authtoken: {e}")
+
+                cmd = [bin_path, "http", str(port)]
+                self.log_lines.append(f"[EXEC] {subprocess.list2cmdline(cmd)}")
+                try:
+                    self.proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        universal_newlines=True,
+                        creationflags=no_window,
+                    )
+                except Exception as e:
+                    self.status = "error"
+                    self.error_message = f"Failed to start ngrok: {e}"
+                    self.log_lines.append(f"[ERROR] {self.error_message}")
+                    self._notify()
+                    return
+
+                def read_ngrok(p):
+                    try:
+                        for line in iter(p.stdout.readline, ''):
+                            if not line:
+                                break
+                            clean = line.strip()
+                            self.log_lines.append(clean)
+                            if "ERR_NGROK" in clean or ("error" in clean.lower() and not self.error_message):
+                                self.error_message = clean
+                    except Exception:
+                        pass
+
+                threading.Thread(target=read_ngrok, args=(self.proc,), daemon=True).start()
+
+                # Poll ngrok local web inspection API on 127.0.0.1:4040/api/tunnels
+                for _ in range(25):
+                    if self.proc is None or self.proc.poll() is not None:
+                        break
+                    time.sleep(0.4)
+                    try:
+                        req = urllib.request.Request("http://127.0.0.1:4040/api/tunnels", headers={"User-Agent": "LLauncher"})
+                        with urllib.request.urlopen(req, timeout=1.2) as resp:
+                            data = json.loads(resp.read().decode("utf-8"))
+                            tunnels = data.get("tunnels", [])
+                            for t in tunnels:
+                                p_url = t.get("public_url", "")
+                                if p_url.startswith("https://"):
+                                    self.public_url = p_url
+                                    self.status = "running"
+                                    self.log_lines.append(f"[SUCCESS] Public HTTPS Tunnel Live: {p_url}")
+                                    self._notify()
+                                    return
+                                elif p_url and not self.public_url:
+                                    self.public_url = p_url
+                            if self.public_url:
+                                self.status = "running"
+                                self.log_lines.append(f"[SUCCESS] Public Tunnel Live: {self.public_url}")
+                                self._notify()
+                                return
+                    except Exception:
+                        pass
+
+                if self.status != "running":
+                    self.status = "error"
+                    if not self.error_message:
+                        if self.proc and self.proc.poll() is not None:
+                            self.error_message = f"ngrok terminated with exit code {self.proc.poll()}."
+                        else:
+                            self.error_message = "Timed out waiting for ngrok tunnel URL."
+                    self.log_lines.append(f"[ERROR] {self.error_message}")
+                    self._notify()
+
+            elif provider == "cloudflare":
+                bin_path = self.find_cloudflared(custom_bin)
+                if not bin_path:
+                    self.status = "error"
+                    self.error_message = "cloudflared.exe not found. Install via 'winget install --id Cloudflare.cloudflared' or browse for binary."
+                    self.log_lines.append(f"[ERROR] {self.error_message}")
+                    self._notify()
+                    return
+
+                cmd = [bin_path, "tunnel", "--url", f"http://127.0.0.1:{port}"]
+                self.log_lines.append(f"[EXEC] {subprocess.list2cmdline(cmd)}")
+                try:
+                    self.proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        universal_newlines=True,
+                        creationflags=no_window,
+                    )
+                except Exception as e:
+                    self.status = "error"
+                    self.error_message = f"Failed to start cloudflared: {e}"
+                    self.log_lines.append(f"[ERROR] {self.error_message}")
+                    self._notify()
+                    return
+
+                cf_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+
+                def read_cf(p):
+                    try:
+                        for line in iter(p.stdout.readline, ''):
+                            if not line:
+                                break
+                            clean = line.strip()
+                            self.log_lines.append(clean)
+                            m = cf_pattern.search(clean)
+                            if m and not self.public_url:
+                                self.public_url = m.group(0)
+                                self.status = "running"
+                                self.log_lines.append(f"[SUCCESS] Cloudflare Quick Tunnel Live: {self.public_url}")
+                                self._notify()
+                    except Exception:
+                        pass
+                    if self.status != "running":
+                        self.status = "error"
+                        if not self.error_message:
+                            self.error_message = "cloudflared closed before generating tunnel URL."
+                        self.log_lines.append(f"[ERROR] {self.error_message}")
+                        self._notify()
+
+                threading.Thread(target=read_cf, args=(self.proc,), daemon=True).start()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def stop_tunnel(self):
+        if self.proc is not None:
+            pid = self.proc.pid
+            try:
+                no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, creationflags=no_window)
+            except Exception:
+                pass
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+            self.proc = None
+        self.status = "stopped"
+        self.public_url = ""
+        self._notify()
+
+    def is_running(self) -> bool:
+        return self.status == "running" and self.proc is not None and self.proc.poll() is None
+
+
+class TunnelDialog(ctk.CTkToplevel):
+    """Flyout dialog to manage instant secure public tunneling (Ngrok / Cloudflare Tunnel)."""
+
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.app = master
+        self.tunnel_manager = getattr(master, "tunnel_manager", None)
+        self.title("Instant Secure Public Tunnel - LLauncher")
+        self.geometry("660x650")
+        self.minsize(600, 580)
+        self.transient(master)
+
+        ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
+        if not os.path.exists(ico_file):
+            ico_file = resource_path("llauncher.ico")
+        if os.path.exists(ico_file):
+            try:
+                self.iconbitmap(ico_file)
+            except Exception:
+                pass
+
+        apply_mica_style(self)
+
+        if master:
+            try:
+                self.update_idletasks()
+                m_x = master.winfo_x()
+                m_y = master.winfo_y()
+                m_w = master.winfo_width()
+                m_h = master.winfo_height()
+                d_w, d_h = 660, 650
+                pos_x = max(0, m_x + (m_w - d_w) // 2)
+                pos_y = max(0, m_y + (m_h - d_h) // 2)
+                self.geometry(f"{d_w}x{d_h}+{pos_x}+{pos_y}")
+            except Exception:
+                pass
+
+        self._build_ui()
+        if self.tunnel_manager:
+            self.tunnel_manager.register_callback(self._on_manager_update)
+            self._render_state(self.tunnel_manager)
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        if self.tunnel_manager:
+            self.tunnel_manager.unregister_callback(self._on_manager_update)
+        if hasattr(self.app, "tunnel_dialog"):
+            self.app.tunnel_dialog = None
+        self.destroy()
+
+    def _build_ui(self):
+        container = ctk.CTkFrame(self, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=16, pady=14)
+
+        # Header Row
+        header = ctk.CTkFrame(container, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 10))
+
+        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        title_box.pack(side="left")
+
+        ctk.CTkLabel(
+            title_box,
+            text="🌐  Instant Secure Tunnel",
+            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            title_box,
+            text="Expose local llama-server via HTTPS for remote access, mobile apps & web APIs.",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_muted"],
+        ).pack(anchor="w")
+
+        self.status_pill = ctk.CTkLabel(
+            header,
+            text="● OFFLINE",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#71717a",
+            fg_color="#18181b",
+            corner_radius=12,
+            padx=12,
+            pady=4,
+        )
+        self.status_pill.pack(side="right")
+
+        # Configuration Card
+        cfg_card = ctk.CTkFrame(
+            container,
+            fg_color=THEME["card_bg"],
+            corner_radius=8,
+            border_width=1,
+            border_color=THEME["card_border"],
+        )
+        cfg_card.pack(fill="x", pady=(0, 10))
+        cfg_card.columnconfigure(1, weight=1)
+
+        # Row 0: Provider Selector
+        ctk.CTkLabel(
+            cfg_card,
+            text="Provider",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+            width=110,
+        ).grid(row=0, column=0, padx=(14, 8), pady=(12, 6), sticky="w")
+
+        self.provider_seg = ctk.CTkSegmentedButton(
+            cfg_card,
+            values=["Ngrok", "Cloudflare Tunnel"],
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#18181b",
+            selected_color=THEME["primary_btn_bg"],
+            selected_hover_color=THEME["primary_btn_hover"],
+            unselected_color="#18181b",
+            unselected_hover_color="#27272a",
+            text_color=THEME["text_primary"],
+            command=self._on_provider_changed,
+            height=28,
+        )
+        current_provider = self.tunnel_manager.provider if self.tunnel_manager else "ngrok"
+        self.provider_seg.set("Ngrok" if current_provider == "ngrok" else "Cloudflare Tunnel")
+        self.provider_seg.grid(row=0, column=1, columnspan=2, padx=(0, 14), pady=(12, 6), sticky="ew")
+
+        # Row 1: Target Port
+        ctk.CTkLabel(
+            cfg_card,
+            text="Local Port",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+            width=110,
+        ).grid(row=1, column=0, padx=(14, 8), pady=5, sticky="w")
+
+        port_val = "8082"
+        if hasattr(self.app, "port_entry"):
+            port_val = self.app.port_entry.get().strip() or "8082"
+
+        self.port_entry = ctk.CTkEntry(
+            cfg_card,
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_primary"],
+            corner_radius=6,
+            height=28,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            width=90,
+        )
+        self.port_entry.insert(0, port_val)
+        self.port_entry.grid(row=1, column=1, padx=(0, 14), pady=5, sticky="w")
+
+        # Row 2: Executable Binary Path + Browse
+        ctk.CTkLabel(
+            cfg_card,
+            text="Binary Path",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+            width=110,
+        ).grid(row=2, column=0, padx=(14, 8), pady=5, sticky="w")
+
+        bin_frame = ctk.CTkFrame(cfg_card, fg_color="transparent")
+        bin_frame.grid(row=2, column=1, columnspan=2, padx=(0, 14), pady=5, sticky="ew")
+        bin_frame.columnconfigure(0, weight=1)
+
+        self.bin_entry = ctk.CTkEntry(
+            bin_frame,
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_primary"],
+            corner_radius=6,
+            height=28,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+        )
+        self.bin_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        self.browse_btn = ctk.CTkButton(
+            bin_frame,
+            text="Browse",
+            width=70,
+            height=28,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6,
+            command=self._browse_binary,
+        )
+        self.browse_btn.grid(row=0, column=1)
+
+        # Row 3: Detection / Helper Info
+        self.detection_lbl = ctk.CTkLabel(
+            cfg_card,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=10),
+            text_color=THEME["text_muted"],
+            anchor="w",
+        )
+        self.detection_lbl.grid(row=3, column=1, columnspan=2, padx=(0, 14), pady=(0, 6), sticky="w")
+
+        # Row 4: Auth Token (for Ngrok)
+        self.token_label = ctk.CTkLabel(
+            cfg_card,
+            text="Auth Token",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+            width=110,
+        )
+        self.token_label.grid(row=4, column=0, padx=(14, 8), pady=(0, 12), sticky="w")
+
+        self.token_entry = ctk.CTkEntry(
+            cfg_card,
+            placeholder_text="Optional (leave blank if already configured)",
+            placeholder_text_color=THEME["text_muted"],
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_primary"],
+            corner_radius=6,
+            height=28,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+        )
+        self.token_entry.grid(row=4, column=1, columnspan=2, padx=(0, 14), pady=(0, 12), sticky="ew")
+
+        # Action Button Row (Start/Stop Tunnel)
+        action_bar = ctk.CTkFrame(container, fg_color="transparent")
+        action_bar.pack(fill="x", pady=(0, 10))
+
+        self.action_btn = ctk.CTkButton(
+            action_bar,
+            text="🚀  Start Secure Tunnel",
+            height=36,
+            fg_color="#047857",
+            hover_color="#059669",
+            border_width=1,
+            border_color="#10b981",
+            text_color="#ffffff",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            corner_radius=6,
+            command=self._toggle_tunnel,
+        )
+        self.action_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        self.helper_action_btn = ctk.CTkButton(
+            action_bar,
+            text="Install / Guide",
+            height=36,
+            width=110,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6,
+            command=self._on_helper_action,
+        )
+        self.helper_action_btn.pack(side="right")
+
+        # Live Public Connection Card
+        self.url_card = ctk.CTkFrame(
+            container,
+            fg_color="#091410",
+            corner_radius=8,
+            border_width=1,
+            border_color="#10b981",
+        )
+        self.url_card.pack(fill="x", pady=(0, 10))
+        self.url_card.columnconfigure(1, weight=1)
+
+        # Public Web URL
+        ctk.CTkLabel(
+            self.url_card,
+            text="Public URL",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#6ee7b7",
+            width=110,
+            anchor="w",
+        ).grid(row=0, column=0, padx=(14, 8), pady=(12, 4), sticky="w")
+
+        self.url_entry = ctk.CTkEntry(
+            self.url_card,
+            fg_color=THEME["input_bg"],
+            border_color="#065f46",
+            border_width=1,
+            text_color="#4ade80",
+            font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
+            corner_radius=6,
+            height=28,
+        )
+        self.url_entry.grid(row=0, column=1, padx=(0, 6), pady=(12, 4), sticky="ew")
+
+        url_btn_frame = ctk.CTkFrame(self.url_card, fg_color="transparent")
+        url_btn_frame.grid(row=0, column=2, padx=(0, 14), pady=(12, 4))
+
+        self.copy_url_btn = ctk.CTkButton(
+            url_btn_frame,
+            text="📋 Copy",
+            width=65,
+            height=28,
+            fg_color="#064e3b",
+            hover_color="#065f46",
+            border_width=1,
+            border_color="#059669",
+            text_color="#ecfdf5",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=6,
+            command=self._copy_public_url,
+        )
+        self.copy_url_btn.pack(side="left", padx=(0, 4))
+
+        self.open_url_btn = ctk.CTkButton(
+            url_btn_frame,
+            text="🌐 Open",
+            width=65,
+            height=28,
+            fg_color="#064e3b",
+            hover_color="#065f46",
+            border_width=1,
+            border_color="#059669",
+            text_color="#ecfdf5",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=6,
+            command=self._open_public_url,
+        )
+        self.open_url_btn.pack(side="left")
+
+        # OpenAI Base URL
+        ctk.CTkLabel(
+            self.url_card,
+            text="OpenAI API Base",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#6ee7b7",
+            width=110,
+            anchor="w",
+        ).grid(row=1, column=0, padx=(14, 8), pady=(4, 12), sticky="w")
+
+        self.api_url_entry = ctk.CTkEntry(
+            self.url_card,
+            fg_color=THEME["input_bg"],
+            border_color="#065f46",
+            border_width=1,
+            text_color="#4ade80",
+            font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
+            corner_radius=6,
+            height=28,
+        )
+        self.api_url_entry.grid(row=1, column=1, padx=(0, 6), pady=(4, 12), sticky="ew")
+
+        self.copy_api_btn = ctk.CTkButton(
+            self.url_card,
+            text="📋 Copy API",
+            width=134,
+            height=28,
+            fg_color="#064e3b",
+            hover_color="#065f46",
+            border_width=1,
+            border_color="#059669",
+            text_color="#ecfdf5",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=6,
+            command=self._copy_api_url,
+        )
+        self.copy_api_btn.grid(row=1, column=2, padx=(0, 14), pady=(4, 12))
+
+        # Diagnostics & Output Log Card
+        diag_header = ctk.CTkFrame(container, fg_color="transparent")
+        diag_header.pack(fill="x", pady=(2, 4))
+
+        ctk.CTkLabel(
+            diag_header,
+            text="Tunnel Diagnostics & Output",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_secondary"],
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            diag_header,
+            text="Clear Log",
+            width=65,
+            height=20,
+            fg_color="transparent",
+            hover_color="#27272a",
+            text_color=THEME["text_muted"],
+            font=ctk.CTkFont(family="Segoe UI", size=10),
+            command=self._clear_diag,
+        ).pack(side="right")
+
+        self.diag_box = ctk.CTkTextbox(
+            container,
+            height=110,
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_secondary"],
+            font=ctk.CTkFont(family="Consolas", size=10),
+            corner_radius=6,
+            wrap="none",
+        )
+        self.diag_box.pack(fill="both", expand=True, pady=(0, 8))
+
+        self._refresh_detection()
+
+    def _on_provider_changed(self, choice: str):
+        self._refresh_detection()
+
+    def _refresh_detection(self):
+        provider = "ngrok" if "ngrok" in self.provider_seg.get().lower() else "cloudflare"
+        if provider == "ngrok":
+            self.token_label.grid()
+            self.token_entry.grid()
+            found = TunnelManager.find_ngrok(self.bin_entry.get().strip())
+            if found:
+                self.bin_entry.delete(0, "end")
+                self.bin_entry.insert(0, found)
+                self.detection_lbl.configure(text=f"✓ Detected: {found}", text_color="#4ade80")
+            else:
+                self.detection_lbl.configure(text="⚠ ngrok.exe not found on PATH or default locations.", text_color="#facc15")
+            self.helper_action_btn.configure(text="ngrok.com")
+        else:
+            self.token_label.grid_remove()
+            self.token_entry.grid_remove()
+            found = TunnelManager.find_cloudflared(self.bin_entry.get().strip())
+            if found:
+                self.bin_entry.delete(0, "end")
+                self.bin_entry.insert(0, found)
+                self.detection_lbl.configure(text=f"✓ Detected: {found}", text_color="#4ade80")
+            else:
+                self.detection_lbl.configure(text="⚠ cloudflared.exe not found. Install via winget or scoop.", text_color="#facc15")
+            self.helper_action_btn.configure(text="Copy winget")
+
+    def _browse_binary(self):
+        f = filedialog.askopenfilename(
+            filetypes=[("Executable Files", "*.exe"), ("All Files", "*.*")],
+            title="Select Tunnel Binary Executable"
+        )
+        if f:
+            self.bin_entry.delete(0, "end")
+            self.bin_entry.insert(0, os.path.normpath(f))
+            self._refresh_detection()
+
+    def _on_helper_action(self):
+        provider = "ngrok" if "ngrok" in self.provider_seg.get().lower() else "cloudflare"
+        if provider == "ngrok":
+            webbrowser.open("https://dashboard.ngrok.com/signup")
+        else:
+            cmd_str = "winget install --id Cloudflare.cloudflared"
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(cmd_str)
+                self.update()
+                self.helper_action_btn.configure(text="✓ Copied!")
+                self.after(1800, lambda: self.helper_action_btn.configure(text="Copy winget"))
+            except Exception:
+                pass
+
+    def _toggle_tunnel(self):
+        if not self.tunnel_manager:
+            return
+        if self.tunnel_manager.is_running() or self.tunnel_manager.status == "starting":
+            self.tunnel_manager.stop_tunnel()
+        else:
+            provider = "ngrok" if "ngrok" in self.provider_seg.get().lower() else "cloudflare"
+            try:
+                port = int(self.port_entry.get().strip())
+            except ValueError:
+                port = 8082
+            custom_bin = self.bin_entry.get().strip()
+            token = self.token_entry.get().strip()
+            self.tunnel_manager.start_tunnel(provider, port, custom_bin, token)
+
+    def _on_manager_update(self, tm):
+        self.after(0, lambda: self._render_state(tm))
+
+    def _render_state(self, tm):
+        # Update logs
+        self.diag_box.configure(state="normal")
+        self.diag_box.delete("1.0", "end")
+        if tm.log_lines:
+            self.diag_box.insert("end", "\n".join(tm.log_lines[-40:]) + "\n")
+            self.diag_box.see("end")
+        self.diag_box.configure(state="disabled")
+
+        if tm.status == "running":
+            self.status_pill.configure(text="● TUNNEL ONLINE", text_color="#4ade80")
+            self.action_btn.configure(
+                text="🛑  Stop Secure Tunnel",
+                fg_color="#991b1b",
+                hover_color="#b91c1c",
+                border_color="#ef4444",
+                state="normal"
+            )
+            self.url_card.configure(fg_color="#091410", border_color="#10b981")
+            self.url_entry.delete(0, "end")
+            self.url_entry.insert(0, tm.public_url)
+            self.api_url_entry.delete(0, "end")
+            self.api_url_entry.insert(0, f"{tm.public_url}/v1")
+        elif tm.status == "starting":
+            self.status_pill.configure(text="● CONNECTING...", text_color="#facc15")
+            self.action_btn.configure(
+                text="⏳  Establishing Tunnel...",
+                fg_color="#854d0e",
+                hover_color="#713f12",
+                border_color="#eab308",
+                state="disabled"
+            )
+            self.url_entry.delete(0, "end")
+            self.url_entry.insert(0, "Waiting for public URL...")
+            self.api_url_entry.delete(0, "end")
+            self.api_url_entry.insert(0, "Waiting for endpoint...")
+        elif tm.status == "error":
+            self.status_pill.configure(text="● ERROR", text_color="#f87171")
+            self.action_btn.configure(
+                text="🚀  Retry Start Tunnel",
+                fg_color="#047857",
+                hover_color="#059669",
+                border_color="#10b981",
+                state="normal"
+            )
+            self.url_card.configure(fg_color=THEME["card_bg"], border_color=THEME["card_border"])
+            self.url_entry.delete(0, "end")
+            self.url_entry.insert(0, tm.error_message or "Tunnel failed to start")
+            self.api_url_entry.delete(0, "end")
+            self.api_url_entry.insert(0, "")
+        else:
+            self.status_pill.configure(text="● OFFLINE", text_color="#71717a")
+            self.action_btn.configure(
+                text="🚀  Start Secure Tunnel",
+                fg_color="#047857",
+                hover_color="#059669",
+                border_color="#10b981",
+                state="normal"
+            )
+            self.url_card.configure(fg_color=THEME["card_bg"], border_color=THEME["card_border"])
+            self.url_entry.delete(0, "end")
+            self.api_url_entry.delete(0, "end")
+
+    def _copy_public_url(self):
+        url = self.url_entry.get().strip()
+        if url and url.startswith("http"):
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(url)
+                self.update()
+                self.copy_url_btn.configure(text="✓ Copied!")
+                self.after(1500, lambda: self.copy_url_btn.configure(text="📋 Copy"))
+            except Exception:
+                pass
+
+    def _open_public_url(self):
+        url = self.url_entry.get().strip()
+        if url and url.startswith("http"):
+            webbrowser.open(url)
+
+    def _copy_api_url(self):
+        url = self.api_url_entry.get().strip()
+        if url and url.startswith("http"):
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(url)
+                self.update()
+                self.copy_api_btn.configure(text="✓ API Copied!")
+                self.after(1500, lambda: self.copy_api_btn.configure(text="📋 Copy API"))
+            except Exception:
+                pass
+
+    def _clear_diag(self):
+        self.diag_box.configure(state="normal")
+        self.diag_box.delete("1.0", "end")
+        self.diag_box.configure(state="disabled")
+        if self.tunnel_manager:
+            self.tunnel_manager.log_lines.clear()
+
+
 class LlamaLauncher(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.withdraw()  # Off-screen construction eliminates launch stutter and flicker
         self.title("LLauncher - llama.cpp Server Launcher")
-        self.geometry("1184x625")
-        self.minsize(1120, 560)
+        self.geometry("1184x640")
+        self.minsize(1120, 580)
         self.resizable(True, True)
         self.configure(fg_color="black")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1128,6 +1994,11 @@ class LlamaLauncher(ctk.CTk):
         self.crash_count = 0
         self.last_crash_time = 0
         self.tray_icon = None
+
+        # Public Secure Tunneling State
+        self.tunnel_manager = TunnelManager(self)
+        self.tunnel_dialog = None
+        self.tunnel_manager.register_callback(self._on_main_tunnel_update)
 
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.pack(fill="both", expand=True, padx=16, pady=10)
@@ -2304,11 +3175,13 @@ class LlamaLauncher(ctk.CTk):
             ("parallel", "Dedicated Slot (-np)", "entry", "1", None),
             ("cache_ram", "System RAM Cache (--cache-ram MiB)", "entry", "8192", None),
             ("cpu_moe", "CPU MoE Experts (--n-cpu-moe)", "entry", "16", None),
+            ("ctx_shift", "Context Shift (--ctx-shift)", "none", "on", None),
+            ("defrag_thold", "KV Defrag Thold (--defrag-thold)", "entry", "0.1", None),
         ]
 
         for idx, (key, label, w_type, default_val, options) in enumerate(opts_config, start=1):
             self.opt_vars[key] = ctk.BooleanVar(value=False)
-            self.opt_str_vars[key] = ctk.StringVar(value=default_val)
+            self.opt_str_vars[key] = ctk.StringVar(value=default_val if default_val else "")
 
             chk = ctk.CTkCheckBox(
                 card,
@@ -2344,7 +3217,9 @@ class LlamaLauncher(ctk.CTk):
                     font=ctk.CTkFont(family="Segoe UI", size=10),
                     state="disabled",
                 )
-            else:
+                widget.grid(row=idx, column=1, sticky="e", padx=(0, 12), pady=2)
+                self.opt_widgets[key] = widget
+            elif w_type == "entry":
                 widget = ctk.CTkEntry(
                     card,
                     textvariable=self.opt_str_vars[key],
@@ -2358,13 +3233,16 @@ class LlamaLauncher(ctk.CTk):
                     font=ctk.CTkFont(family="Segoe UI", size=11),
                     state="disabled",
                 )
-
-            widget.grid(row=idx, column=1, sticky="e", padx=(0, 12), pady=2)
-            self.opt_widgets[key] = widget
+                widget.grid(row=idx, column=1, sticky="e", padx=(0, 12), pady=2)
+                self.opt_widgets[key] = widget
+            else:
+                self.opt_widgets[key] = None
 
     def _toggle_opt_widget(self, key):
+        widget = self.opt_widgets.get(key)
+        if widget is None:
+            return
         is_active = self.opt_vars[key].get()
-        widget = self.opt_widgets[key]
 
         if is_active:
             widget.configure(state="normal")
@@ -2566,6 +3444,23 @@ class LlamaLauncher(ctk.CTk):
             height=24,
         )
         self.tray_close_chk.pack(side="left", padx=(0, 10))
+
+        # Public Tunnel quick button on the right
+        self.tunnel_btn = ctk.CTkButton(
+            self.drawer_bar,
+            text="🌐  Public Tunnel",
+            height=28,
+            width=135,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            border_width=1,
+            border_color="#3f3f46",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#e4e4e7",
+            corner_radius=6,
+            command=self.open_tunnel_dialog,
+        )
+        self.tunnel_btn.pack(side="right", padx=(0, 8))
 
         # Tray quick button on the right
         self.tray_btn = ctk.CTkButton(
@@ -2904,6 +3799,11 @@ class LlamaLauncher(ctk.CTk):
         if self.opt_vars.get("cpu_moe") and self.opt_vars["cpu_moe"].get():
             val = self.opt_str_vars["cpu_moe"].get().strip() or "16"
             cmd.extend(["--n-cpu-moe", val])
+        if self.opt_vars.get("ctx_shift") and self.opt_vars["ctx_shift"].get():
+            cmd.append("--ctx-shift")
+        if self.opt_vars.get("defrag_thold") and self.opt_vars["defrag_thold"].get():
+            val = self.opt_str_vars["defrag_thold"].get().strip() or "0.1"
+            cmd.extend(["--defrag-thold", val])
 
         return cmd
 
@@ -3351,6 +4251,24 @@ class LlamaLauncher(ctk.CTk):
                     self._toggle_opt_widget(opt_key)
                     found_any = True
 
+        # Context Shift: --ctx-shift
+        if "--ctx-shift" in content:
+            if "ctx_shift" in self.opt_vars:
+                self.opt_vars["ctx_shift"].set(True)
+                self._toggle_opt_widget("ctx_shift")
+                found_any = True
+
+        # Defrag Threshold: --defrag-thold <val>
+        defrag_match = re.search(r'--defrag-thold\s+["\']?([\d\.-]+)["\']?|["\']--defrag-thold["\']\s*,\s*["\']([\d\.-]+)["\']', content)
+        if defrag_match:
+            if "defrag_thold" in self.opt_vars:
+                val = defrag_match.group(1) or defrag_match.group(2)
+                self.opt_vars["defrag_thold"].set(True)
+                if val:
+                    self.opt_str_vars["defrag_thold"].set(val)
+                self._toggle_opt_widget("defrag_thold")
+                found_any = True
+
         return found_any
 
     def toggle_server(self):
@@ -3557,6 +4475,7 @@ class LlamaLauncher(ctk.CTk):
                 pystray.MenuItem("Stop Model Server", lambda: self.after(0, self.stop_server), visible=lambda item: self.is_server_running()),
                 pystray.MenuItem("Restart Model Server", lambda: self.after(0, self.restart_server)),
                 pystray.MenuItem("View Logs", lambda: self.after(0, self.open_log_console)),
+                pystray.MenuItem("Secure Public Tunnel...", lambda: self.after(0, self.open_tunnel_dialog)),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Export Settings (.ps1)", lambda: self.after(0, self.export_script)),
                 pystray.MenuItem("Import Settings (.ps1)", lambda: self.after(0, self.import_settings)),
@@ -3567,6 +4486,46 @@ class LlamaLauncher(ctk.CTk):
             threading.Thread(target=self.tray_icon.run, daemon=True).start()
         except Exception:
             self.tray_icon = None
+
+    def open_tunnel_dialog(self):
+        """Open or bring to front the Instant Secure Tunnel manager window."""
+        if hasattr(self, "tunnel_dialog") and self.tunnel_dialog is not None and self.tunnel_dialog.winfo_exists():
+            self.tunnel_dialog.lift()
+            self.tunnel_dialog.focus_force()
+        else:
+            self.tunnel_dialog = TunnelDialog(self)
+
+    def _on_main_tunnel_update(self, tm):
+        """Callback to update main window toolbar button when tunnel status changes."""
+        def apply_state():
+            if not hasattr(self, "tunnel_btn"):
+                return
+            if tm.status == "running":
+                self.tunnel_btn.configure(
+                    text="🟢  Tunnel Active",
+                    fg_color="#065f46",
+                    hover_color="#047857",
+                    border_color="#10b981",
+                    text_color="#ecfdf5",
+                )
+                self._flash_badge("● SECURE TUNNEL ONLINE")
+            elif tm.status == "starting":
+                self.tunnel_btn.configure(
+                    text="⏳  Tunnel Starting...",
+                    fg_color="#854d0e",
+                    hover_color="#713f12",
+                    border_color="#eab308",
+                    text_color="#fef08a",
+                )
+            else:
+                self.tunnel_btn.configure(
+                    text="🌐  Public Tunnel",
+                    fg_color="#18181b",
+                    hover_color="#27272a",
+                    border_color="#3f3f46",
+                    text_color="#e4e4e7",
+                )
+        self.after(0, apply_state)
 
     def show_window(self):
         """Restore window from system tray and bring to front."""
@@ -3580,8 +4539,10 @@ class LlamaLauncher(ctk.CTk):
         self._flash_badge("● MINIMIZED TO TRAY")
 
     def _exit_app(self):
-        """Full exit routine stopping background server and destroying tray icon."""
+        """Full exit routine stopping background server, tunnel, and destroying tray icon."""
         self.manual_stop = True
+        if hasattr(self, "tunnel_manager") and self.tunnel_manager is not None:
+            self.tunnel_manager.stop_tunnel()
         if self.is_server_running():
             try:
                 no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)

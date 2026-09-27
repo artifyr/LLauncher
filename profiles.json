@@ -42,6 +42,14 @@
       "cpu_moe": {
         "enabled": true,
         "val": "16"
+      },
+      "ctx_shift": {
+        "enabled": false,
+        "val": "on"
+      },
+      "defrag_thold": {
+        "enabled": false,
+        "val": "0.1"
       }
     },
     "vision": false,
@@ -86,6 +94,18 @@
       "cache_ram": {
         "enabled": false,
         "val": "8192"
+      },
+      "cpu_moe": {
+        "enabled": false,
+        "val": "16"
+      },
+      "ctx_shift": {
+        "enabled": false,
+        "val": "on"
+      },
+      "defrag_thold": {
+        "enabled": false,
+        "val": "0.1"
       }
     }
   },
@@ -128,6 +148,18 @@
       "cache_ram": {
         "enabled": true,
         "val": "8192"
+      },
+      "cpu_moe": {
+        "enabled": false,
+        "val": "16"
+      },
+      "ctx_shift": {
+        "enabled": true,
+        "val": "on"
+      },
+      "defrag_thold": {
+        "enabled": true,
+        "val": "0.1"
       }
     }
   }

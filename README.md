@@ -21,6 +21,8 @@ Lightweight hardware tuner, profile manager, and local inference controller for 
 ## Core Capabilities
 
 - **Windows 11 Mica Interface**: Native dark-mode styling with translucent Mica material and zero launch flicker.
+- **Instant Secure Public Tunneling**: Built-in manager for Ngrok and Cloudflare Quick Tunnel (`cloudflared`) to expose `llama-server` over public HTTPS for mobile devices, remote web UIs, and external APIs with zero port forwarding.
+- **Context Shift & Auto-Compaction**: Continuous sliding context (`--ctx-shift`) to prevent token-overflow halts, plus automated KV cache defragmentation (`--defrag-thold`).
 - **Model Library & Vision Auto-Detect**: 15-model history with fast switching and automatic `mmproj` vision attachment.
 - **System Tray Integration**: Background tray minimization with full right-click control menu.
 - **Embedded Log Console**: Expandable drawer streaming real-time stdout/stderr with regex/keyword filter, auto-scroll, and copy.
@@ -51,6 +53,8 @@ Lightweight hardware tuner, profile manager, and local inference controller for 
 - **`--jinja`**: Native chat templating for formatted prompts and function calling.
 
 ### Hardware & Optimization Flags
+- **`--ctx-shift`**: Enables continuous rolling context shift when context limit is reached instead of halting.
+- **`--defrag-thold`**: Threshold for automated KV cache memory defragmentation and compaction (e.g. `0.1`).
 - **`--load-mode mlock`**: Pins model weights and KV memory in physical RAM to prevent pagefile swapping.
 - **`-tb`**: Dedicated CPU threads used to accelerate prompt ingestion and pre-fill processing.
 - **`--fit-target`**: Reserves a VRAM safety margin (in MiB) to avoid driver out-of-memory errors.
