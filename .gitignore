@@ -17,3 +17,4 @@ dist/
 # Internal docs / notes
 newfeatures.md
 recent_models.json
+app_config.json

@@ -116,9 +116,18 @@ BATCH_STEPS = [128, 256, 512, 1024, 2048, 4096]
 UBATCH_STEPS = [128, 256, 512, 1024, 2048]
 KV_CACHE_TYPES = ["q8_0", "q4_0", "q4_1", "f16"]
 
-# Path to persistent profiles configuration
+# Path to persistent configurations
 PROFILES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles.json")
 RECENT_MODELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recent_models.json")
+APP_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_config.json")
+
+# Curated community-verified sampling presets
+SAMPLER_PRESETS = {
+    "Default / Balanced": {"temp": "0.7", "topp": "0.95", "minp": "0.05"},
+    "Precise / Code": {"temp": "0.1", "topp": "0.90", "minp": "0.02"},
+    "Creative / Story": {"temp": "0.9", "topp": "0.98", "minp": "0.05"},
+    "Deterministic": {"temp": "0.0", "topp": "1.00", "minp": "0.00"},
+}
 
 DEFAULT_PROFILES = [
     {
@@ -2035,6 +2044,13 @@ class LlamaLauncher(ctk.CTk):
         self.recent_models = []
         self._load_recent_models()
 
+        # Configurable Model Library & App Config
+        self.app_config = {}
+        self.models_dir = ""
+        self.scanned_models_map = {}
+        self._scan_thread = None
+        self._load_app_config()
+
         # Process management & desktop ergonomics state
         self.log_queue = queue.Queue()
         self.log_buffer = collections.deque(maxlen=2000)
@@ -2078,6 +2094,7 @@ class LlamaLauncher(ctk.CTk):
         self.after(50, self._process_log_queue)
         self.deiconify()
         self._detect_devices()
+        self._trigger_models_scan()
 
     def _load_profiles(self):
         """Load profiles from profiles.json or initialize with defaults."""
@@ -2125,6 +2142,165 @@ class LlamaLauncher(ctk.CTk):
                 json.dump(self.recent_models, f, indent=2)
         except Exception:
             pass
+
+    def _load_app_config(self):
+        """Load persistent application configurations including models_dir."""
+        self.app_config = {}
+        if os.path.exists(APP_CONFIG_FILE):
+            try:
+                with open(APP_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        self.app_config = data
+            except Exception:
+                pass
+        self.models_dir = self.app_config.get("models_dir", "")
+        if not self.models_dir:
+            # Fallback to existing recent model directory or user's models folder if exists
+            if self.recent_models and os.path.isfile(self.recent_models[0]):
+                self.models_dir = os.path.dirname(self.recent_models[0])
+            else:
+                default_models = os.path.join(os.path.expanduser("~"), "models")
+                if os.path.isdir(default_models):
+                    self.models_dir = default_models
+
+    def _persist_app_config(self):
+        """Persist application configurations to app_config.json."""
+        try:
+            self.app_config["models_dir"] = self.models_dir
+            with open(APP_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.app_config, f, indent=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _format_file_size(size_bytes: int) -> str:
+        """Format byte size into human readable string (GB or MB)."""
+        gb = size_bytes / (1024 ** 3)
+        if gb >= 1.0:
+            return f"{gb:.2f} GB"
+        mb = size_bytes / (1024 ** 2)
+        return f"{mb:.1f} MB"
+
+    @classmethod
+    def scan_models_in_dir(cls, directory: str) -> dict:
+        """
+        Scan directory for .gguf files, grouping multi-part models (e.g. 00001-of-00004, 0001, part1).
+        Excludes standalone mmproj-*.gguf files.
+        Returns a dict mapping display_name -> first_part_filepath.
+        """
+        if not directory or not os.path.isdir(directory):
+            return {}
+
+        try:
+            entries = os.listdir(directory)
+        except Exception:
+            return {}
+
+        # Patterns for split/multipart models
+        p1 = re.compile(r"^(.*?)[-_.]+(\d{4,5})[-_.]+(?:of[-_.]+(\d{4,5}))\.gguf$", re.IGNORECASE)
+        p2 = re.compile(r"^(.*?)[-_.]+(\d{4,5})\.gguf$", re.IGNORECASE)
+        p3 = re.compile(r"^(.*?)[-_.]+part[-_.]*(\d{1,5})\.gguf$", re.IGNORECASE)
+
+        groups = {} # base_key -> list of (part_num, full_path, size)
+        singles = [] # list of (full_path, filename, size)
+
+        for filename in entries:
+            lower = filename.lower()
+            if not lower.endswith(".gguf") or "mmproj" in lower:
+                continue
+
+            full_path = os.path.normpath(os.path.join(directory, filename))
+            if not os.path.isfile(full_path):
+                continue
+
+            try:
+                size = os.path.getsize(full_path)
+            except Exception:
+                size = 0
+
+            m1 = p1.match(filename)
+            m2 = p2.match(filename)
+            m3 = p3.match(filename)
+
+            if m1:
+                base = m1.group(1).rstrip("-_.")
+                part = int(m1.group(2))
+                groups.setdefault(base, []).append((part, full_path, size))
+            elif m2:
+                base = m2.group(1).rstrip("-_.")
+                part = int(m2.group(2))
+                groups.setdefault(base, []).append((part, full_path, size))
+            elif m3:
+                base = m3.group(1).rstrip("-_.")
+                part = int(m3.group(2))
+                groups.setdefault(base, []).append((part, full_path, size))
+            else:
+                singles.append((full_path, filename, size))
+
+        result_map = {}
+
+        # Process grouped multi-part models
+        for base, parts in sorted(groups.items(), key=lambda x: x[0].lower()):
+            if len(parts) > 1:
+                parts.sort(key=lambda x: x[0])
+                first_file = parts[0][1] # lowest part number, e.g. 00001 or 0001
+                total_size = sum(x[2] for x in parts)
+                size_str = cls._format_file_size(total_size)
+                display_label = f"{base} ({size_str} - {len(parts)} parts)"
+                result_map[display_label] = first_file
+            else:
+                # Only 1 part found; display as single
+                p_info = parts[0]
+                fname = os.path.basename(p_info[1])
+                clean_name = fname[:-5] if fname.lower().endswith(".gguf") else fname
+                size_str = cls._format_file_size(p_info[2])
+                display_label = f"{clean_name} ({size_str})"
+                result_map[display_label] = p_info[1]
+
+        # Process standalone single models
+        for full_path, fname, size in sorted(singles, key=lambda x: x[1].lower()):
+            clean_name = fname[:-5] if fname.lower().endswith(".gguf") else fname
+            size_str = cls._format_file_size(size)
+            display_label = f"{clean_name} ({size_str})"
+            result_map[display_label] = full_path
+
+        return result_map
+
+    def _trigger_models_scan(self, on_complete=None):
+        """Asynchronously scan the configured models_dir and populate model_library_menu."""
+        models_folder = self.models_dir.strip() if hasattr(self, "models_dir") else ""
+        if hasattr(self, "models_dir_entry"):
+            models_folder = self.models_dir_entry.get().strip()
+
+        if not models_folder or not os.path.isdir(models_folder):
+            self.scanned_models_map = {}
+            if hasattr(self, "model_library_menu"):
+                self.model_library_menu.configure(values=["No Models Found (Set Folder)"])
+                self.model_library_menu.set("No Models Found (Set Folder)")
+            if on_complete:
+                on_complete(0)
+            return
+
+        def worker():
+            res = self.scan_models_in_dir(models_folder)
+
+            def apply_results():
+                self.scanned_models_map = res
+                if hasattr(self, "model_library_menu"):
+                    if res:
+                        options = ["Select Model from Folder..."] + list(res.keys())
+                        self.model_library_menu.configure(values=options)
+                        self.model_library_menu.set("Select Model from Folder...")
+                    else:
+                        self.model_library_menu.configure(values=["No Models in Folder"])
+                        self.model_library_menu.set("No Models in Folder")
+                if on_complete:
+                    on_complete(len(res))
+
+            self.after(0, apply_results)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _add_recent_model(self, model_path: str):
         """Add model path to recent history and refresh UI dropdown."""
@@ -2529,9 +2705,70 @@ class LlamaLauncher(ctk.CTk):
         )
         self.browse_exe_btn.grid(row=0, column=2, sticky="e", padx=(0, 12), pady=(8, 4))
 
-        # Row 1: Model GGUF + Vision Checkbox
+        # Row 1: Models Folder (Configurable Directory)
+        ctk.CTkLabel(
+            card,
+            text="Models Folder",
+            font=self.font_label,
+            text_color=THEME["text_secondary"],
+            width=115,
+            anchor="w",
+        ).grid(row=1, column=0, sticky="w", padx=(12, 4), pady=(0, 5))
+
+        self.models_dir_entry = ctk.CTkEntry(
+            card,
+            placeholder_text=r"Folder containing .gguf models (e.g. D:\Models)",
+            placeholder_text_color=THEME["text_muted"],
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_primary"],
+            corner_radius=6,
+            height=30,
+            font=self.font_sm,
+        )
+        if self.models_dir:
+            self.models_dir_entry.insert(0, self.models_dir)
+        self.models_dir_entry.grid(row=1, column=1, sticky="ew", padx=(4, 8), pady=(0, 5))
+
+        folder_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        folder_btn_frame.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 5))
+
+        self.browse_dir_btn = ctk.CTkButton(
+            folder_btn_frame,
+            text="Browse",
+            width=50,
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self.choose_models_folder,
+        )
+        self.browse_dir_btn.pack(side="left", padx=(0, 4))
+
+        self.refresh_models_btn = ctk.CTkButton(
+            folder_btn_frame,
+            text="🔄",
+            width=31,
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            command=self.refresh_models_folder,
+        )
+        self.refresh_models_btn.pack(side="left")
+
+        # Row 2: Model GGUF + Vision Checkbox
         model_lbl_frame = ctk.CTkFrame(card, fg_color="transparent")
-        model_lbl_frame.grid(row=1, column=0, sticky="w", padx=(12, 4), pady=(0, 6))
+        model_lbl_frame.grid(row=2, column=0, sticky="w", padx=(12, 4), pady=(0, 6))
 
         ctk.CTkLabel(
             model_lbl_frame,
@@ -2561,9 +2798,9 @@ class LlamaLauncher(ctk.CTk):
         )
         self.vision_chk.pack(side="left", padx=(10, 0))
 
-        # Model input container: Entry + Recent Models Dropdown
+        # Model input container: Entry + Library Dropdown + Recent Models Dropdown
         model_input_frame = ctk.CTkFrame(card, fg_color="transparent")
-        model_input_frame.grid(row=1, column=1, sticky="ew", padx=(4, 8), pady=(0, 6))
+        model_input_frame.grid(row=2, column=1, sticky="ew", padx=(4, 8), pady=(0, 6))
         model_input_frame.columnconfigure(0, weight=1)
 
         self.model_entry = ctk.CTkEntry(
@@ -2579,6 +2816,25 @@ class LlamaLauncher(ctk.CTk):
             font=self.font_sm,
         )
         self.model_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        self.model_library_menu = ctk.CTkOptionMenu(
+            model_input_frame,
+            values=["Scanning Folder..."],
+            command=self._on_library_model_selected,
+            fg_color=THEME["input_bg"],
+            button_color="#27272a",
+            button_hover_color="#3f3f46",
+            text_color=THEME["text_secondary"],
+            dropdown_fg_color=THEME["dropdown_bg"],
+            dropdown_text_color=THEME["text_primary"],
+            dropdown_hover_color="#27272a",
+            corner_radius=6,
+            height=30,
+            width=150,
+            font=self.font_sm,
+        )
+        self.model_library_menu.set("Model Library...")
+        self.model_library_menu.grid(row=0, column=1, sticky="e", padx=(0, 4))
 
         initial_history_values = ["Recent Models..."]
         for p in self.recent_models:
@@ -2599,11 +2855,11 @@ class LlamaLauncher(ctk.CTk):
             dropdown_hover_color="#27272a",
             corner_radius=6,
             height=30,
-            width=140,
+            width=125,
             font=self.font_sm,
         )
         self.recent_models_menu.set("Recent Models...")
-        self.recent_models_menu.grid(row=0, column=1, sticky="e")
+        self.recent_models_menu.grid(row=0, column=2, sticky="e")
 
         self.browse_btn = ctk.CTkButton(
             card,
@@ -2619,9 +2875,9 @@ class LlamaLauncher(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             command=self.browse_model,
         )
-        self.browse_btn.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 6))
+        self.browse_btn.grid(row=2, column=2, sticky="e", padx=(0, 12), pady=(0, 6))
 
-        # Row 2: Vision mmproj (Conditionally displayed when Vision checkbox is checked)
+        # Row 3: Vision mmproj (Conditionally displayed when Vision checkbox is checked)
         self.mmproj_label = ctk.CTkLabel(
             card,
             text="Vision mmproj",
@@ -2664,9 +2920,9 @@ class LlamaLauncher(ctk.CTk):
         """Show or hide mmproj row below GGUF selector based on Vision checkbox."""
         if hasattr(self, "mmproj_label") and hasattr(self, "vision_var"):
             if self.vision_var.get():
-                self.mmproj_label.grid(row=2, column=0, sticky="w", padx=(12, 4), pady=(0, 8))
-                self.mmproj_entry.grid(row=2, column=1, sticky="ew", padx=(4, 8), pady=(0, 8))
-                self.mmproj_browse_btn.grid(row=2, column=2, sticky="e", padx=(0, 12), pady=(0, 8))
+                self.mmproj_label.grid(row=3, column=0, sticky="w", padx=(12, 4), pady=(0, 8))
+                self.mmproj_entry.grid(row=3, column=1, sticky="ew", padx=(4, 8), pady=(0, 8))
+                self.mmproj_browse_btn.grid(row=3, column=2, sticky="e", padx=(0, 12), pady=(0, 8))
             else:
                 self.mmproj_label.grid_remove()
                 self.mmproj_entry.grid_remove()
@@ -2947,12 +3203,37 @@ class LlamaLauncher(ctk.CTk):
         card.columnconfigure(1, weight=1)
         card.columnconfigure(2, weight=0, minsize=48)
 
+        # Header with Title and Sampler Presets Dropdown
+        hdr_frame = ctk.CTkFrame(card, fg_color="transparent")
+        hdr_frame.grid(row=0, column=0, columnspan=3, sticky="ew", padx=12, pady=(8, 6))
+        hdr_frame.columnconfigure(0, weight=1)
+
         ctk.CTkLabel(
-            card,
+            hdr_frame,
             text="BATCHING & GENERATION",
             font=self.font_section,
             text_color=THEME["text_primary"],
-        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 6))
+        ).pack(side="left")
+
+        preset_options = ["Sampler Preset..."] + list(SAMPLER_PRESETS.keys())
+        self.sampler_preset_menu = ctk.CTkOptionMenu(
+            hdr_frame,
+            values=preset_options,
+            command=self._on_sampler_preset_selected,
+            fg_color=THEME["input_bg"],
+            button_color="#27272a",
+            button_hover_color="#3f3f46",
+            text_color=THEME["text_secondary"],
+            dropdown_fg_color=THEME["dropdown_bg"],
+            dropdown_text_color=THEME["text_primary"],
+            dropdown_hover_color="#27272a",
+            corner_radius=6,
+            height=24,
+            width=140,
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+        )
+        self.sampler_preset_menu.set("Sampler Preset...")
+        self.sampler_preset_menu.pack(side="right")
 
         ctk.CTkLabel(
             card,
@@ -3188,6 +3469,30 @@ class LlamaLauncher(ctk.CTk):
 
     def _on_ubatch_change(self, val):
         self.ubatch_badge.configure(text=str(UBATCH_STEPS[int(round(val))]))
+
+    def _on_sampler_preset_selected(self, preset_name: str):
+        """Apply community-verified sampling parameters and persist to active profile."""
+        if preset_name not in SAMPLER_PRESETS:
+            return
+
+        cfg = SAMPLER_PRESETS[preset_name]
+        self.temp_entry.delete(0, "end")
+        self.temp_entry.insert(0, cfg["temp"])
+
+        self.topp_entry.delete(0, "end")
+        self.topp_entry.insert(0, cfg["topp"])
+
+        self.minp_entry.delete(0, "end")
+        self.minp_entry.insert(0, cfg["minp"])
+
+        if hasattr(self, "profiles") and self.profiles and hasattr(self, "active_profile_idx"):
+            p = self.profiles[self.active_profile_idx]
+            p["temp"] = cfg["temp"]
+            p["topp"] = cfg["topp"]
+            p["minp"] = cfg["minp"]
+            self._persist_profiles()
+
+        self._flash_badge(f"● SAMPLER: {preset_name.upper()}")
 
     def _build_optimizations_column(self, parent):
         """Column 3: Hardware profile options."""
@@ -3761,6 +4066,55 @@ class LlamaLauncher(ctk.CTk):
             self.exe_entry.insert(0, os.path.normpath(f))
             self._refresh_devices()
 
+    def choose_models_folder(self):
+        """Open directory chooser for Models Folder, persist config, and scan for models."""
+        initial_dir = self.models_dir if (self.models_dir and os.path.isdir(self.models_dir)) else None
+        d = filedialog.askdirectory(initialdir=initial_dir, title="Select Models Folder Containing .gguf Files")
+        if d:
+            norm_dir = os.path.normpath(d)
+            self.models_dir = norm_dir
+            if hasattr(self, "models_dir_entry"):
+                self.models_dir_entry.delete(0, "end")
+                self.models_dir_entry.insert(0, norm_dir)
+            self._persist_app_config()
+            self._flash_badge("● SCANNING MODELS FOLDER...")
+            self.refresh_models_folder()
+
+    def refresh_models_folder(self):
+        """Refresh models list from the entered or selected models folder."""
+        if hasattr(self, "models_dir_entry"):
+            entered_dir = self.models_dir_entry.get().strip()
+            if entered_dir and os.path.isdir(entered_dir):
+                self.models_dir = os.path.normpath(entered_dir)
+                self._persist_app_config()
+
+        if hasattr(self, "refresh_models_btn"):
+            self.refresh_models_btn.configure(state="disabled")
+
+        def on_done(count):
+            if hasattr(self, "refresh_models_btn"):
+                self.refresh_models_btn.configure(state="normal")
+            if count > 0:
+                self._flash_badge(f"● LOADED {count} MODELS")
+            else:
+                self._flash_badge("⚠ NO MODELS IN FOLDER", is_alert=True)
+
+        self._trigger_models_scan(on_complete=on_done)
+
+    def _on_library_model_selected(self, choice: str):
+        """Handle user selecting a model from the scanned folder library dropdown."""
+        if choice in ("Model Library...", "Select Model from Folder...", "No Models in Folder", "No Models Found (Set Folder)", "Scanning Folder..."):
+            return
+
+        if choice in self.scanned_models_map:
+            target_path = self.scanned_models_map[choice]
+            if os.path.exists(target_path):
+                self.model_entry.delete(0, "end")
+                self.model_entry.insert(0, target_path)
+                self._add_recent_model(target_path)
+                self._auto_detect_vision_mmproj(target_path)
+                self._flash_badge(f"● SELECTED: {os.path.basename(target_path)[:24]}")
+
     def browse_model(self):
         f = filedialog.askopenfilename(filetypes=[("GGUF Files", "*.gguf")])
         if f:
@@ -3769,6 +4123,14 @@ class LlamaLauncher(ctk.CTk):
             self.model_entry.insert(0, norm_path)
             self._add_recent_model(norm_path)
             self._auto_detect_vision_mmproj(norm_path)
+            # If current models_dir is empty, automatically adopt parent directory of selected model
+            if not self.models_dir:
+                self.models_dir = os.path.dirname(norm_path)
+                if hasattr(self, "models_dir_entry"):
+                    self.models_dir_entry.delete(0, "end")
+                    self.models_dir_entry.insert(0, self.models_dir)
+                self._persist_app_config()
+                self._trigger_models_scan()
 
     def _build_command_args(self):
         """Validate input paths and construct full argument list for llama-server."""
