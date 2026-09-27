@@ -14,55 +14,50 @@ Lightweight hardware tuner, profile manager, and local inference controller for 
 
 ## Overview
 
-**Llauncher** is a native Windows controller for orchestrating local Large Language Model (LLM) instances powered by `llama.cpp`. Built with CustomTkinter and native Windows 11 Mica material, Llauncher provides a zero-latency interface to configure hardware offloading, context windows, KV cache quantization, sampling parameters, vision projectors, and persistent profiles without manual command-line overhead.
-
-Tuned for high-VRAM hardware, including AMD Radeon RX 9070 XT (16 GB VRAM) paired with 32 GB system RAM under Vulkan, with full support for NVIDIA CUDA and CPU-only inference.
+**Llauncher** is a native Windows controller for local Large Language Model (LLM) instances powered by `llama.cpp`. Built with CustomTkinter and Windows 11 Mica material, Llauncher provides a zero-latency interface to configure hardware offloading, context windows, KV cache quantization, sampling parameters, vision projectors, and persistent profiles without manual command-line overhead. Supports AMD Vulkan, NVIDIA CUDA, and CPU-only inference.
 
 ---
 
 ## Core Capabilities
 
-- **Windows 11 Mica Interface**: Native dark-mode styling with translucent Mica material, high-contrast off-white controls, and off-screen staging to eliminate launch flicker.
-- **Model Library & Vision Auto-Detect**: 15-model history with fast switching, automatic multimodal detection, and auto-attachment of matching `mmproj` vision files.
-- **System Tray Integration**: Background notification tray minimization with a right-click menu to show, hide, start, stop, restart, view logs, export/import, or exit.
-- **Embedded Log Console**: Expandable in-window drawer streaming real-time stdout/stderr output from `llama-server.exe` with regex/keyword filtering, auto-scroll, and log copying.
-- **Auto-Restart Watchdog**: Background watchdog that automatically restarts the server within 2 seconds of an unexpected crash or driver timeout, guarded by a 5-attempt circuit breaker.
-- **Export & Import PowerShell Settings**: One-click export to standalone executable `.ps1` or `.bat` scripts with embedded metadata, plus instant import to restore all UI fields from any script.
-- **AI Profile Helper**: Built-in prompt generator allowing users to enter multi-GPU (GPU_1 to GPU_4), CPU, RAM, and model specs to instantly copy an optimization prompt for Grok, ChatGPT, Claude, and other LLMs.
-- **Frontend Integrations & API Tester**: Pre-formatted snippets for Open WebUI, SillyTavern, Continue/Cline, and Hermes Agent, plus an integrated endpoint health checker for `/v1/models` and `/v1/chat/completions`.
-- **3-Slot Hardware Profiles**: Instant switching between Balanced, Max Quality, and Max Performance profiles, with in-place saving and custom profile renaming.
-- **Vulkan Driver Stability**: Automatically injects `GGML_VK_DISABLE_PINNED=1` into the engine environment to prevent GPU driver memory allocation faults.
+- **Windows 11 Mica Interface**: Native dark-mode styling with translucent Mica material and zero launch flicker.
+- **Model Library & Vision Auto-Detect**: 15-model history with fast switching and automatic `mmproj` vision attachment.
+- **System Tray Integration**: Background tray minimization with full right-click control menu.
+- **Embedded Log Console**: Expandable drawer streaming real-time stdout/stderr with regex/keyword filter, auto-scroll, and copy.
+- **Auto-Restart Watchdog**: Background watchdog restarting the server within 2 seconds of a crash (5-attempt circuit breaker).
+- **Export & Import PowerShell Settings**: One-click export to executable `.ps1` or `.bat` scripts, plus instant import.
+- **AI Profile Helper**: Built-in generator to enter multi-GPU (GPU_1 to GPU_4), CPU, RAM, and model specs to copy an optimization prompt for Grok, ChatGPT, Claude, and other LLMs.
+- **Frontend Integrations & API Tester**: One-click config snippets for Open WebUI, SillyTavern, Continue/Cline, and Hermes Agent, plus an integrated endpoint tester.
+- **3-Slot Hardware Profiles**: Fast switching between Balanced, Max Quality, and Max Performance with in-place saving and renaming.
+- **Vulkan Driver Stability**: Injects `GGML_VK_DISABLE_PINNED=1` to prevent GPU driver memory allocation faults.
 
 ---
 
 ## Parameter Reference
 
 ### Core Arguments
-- **`-m` (Model File)**: Filepath to the GGUF model weights on disk.
-- **`--mmproj` (Vision Projector)**: Filepath to the companion multimodal projector weights for vision models.
-- **`--device` (Compute Device)**: Hardware acceleration backend target (`Vulkan0`, `Vulkan1`, `CUDA0`, or `none`).
-- **`-ngl` (GPU Offload Layers)**: Number of model layers offloaded to GPU VRAM (0 for CPU only, up to 99 for complete offload).
-- **`-c` (Context Size)**: Total token context window capacity (from 2,048 up to 131,072 tokens).
-- **`-b` (Batch Size)**: Logical batch size for parallel prompt evaluation and generation (128 to 4096).
-- **`-ub` (Micro-Batch Size)**: Physical batch size processed simultaneously on hardware per compute step (128 to 2048).
-- **`-t` (Threads)**: Number of CPU execution threads allocated during generation.
-- **`--port` (Server Port)**: Local HTTP listener port for the OpenAI-compatible REST API (default `8082`).
-- **`-ctk` (K Cache Precision)**: Quantization format for Key tensors in KV cache memory (`q8_0`, `q4_0`, `q4_1`, `f16`).
-- **`-ctv` (V Cache Precision)**: Quantization format for Value tensors in KV cache memory (`q8_0`, `q4_0`, `q4_1`, `f16`).
-- **`--temp` (Temperature)**: Randomness scaling factor applied to token logits during sampling.
-- **`--top-p` (Top-P)**: Cumulative probability threshold for nucleus sampling.
-- **`--min-p` (Min-P)**: Minimum probability cutoff relative to the probability of the most likely token.
-- **`-fa` (Flash Attention)**: Hardware-accelerated memory-efficient attention mechanism.
-- **`--jinja` (Jinja Templates)**: Enables native chat templating for formatted prompts, function calling, and tools.
+- **`-m`**: Filepath to GGUF model weights.
+- **`--mmproj`**: Filepath to companion multimodal projector weights for vision models.
+- **`--device`**: Acceleration backend target (`Vulkan0`, `Vulkan1`, `CUDA0`, or `none`).
+- **`-ngl`**: Model layers offloaded to GPU VRAM (0 for CPU, 99 for complete offload).
+- **`-c`**: Total token context window capacity (2,048 to 131,072 tokens).
+- **`-b`**: Logical batch size for parallel prompt evaluation (128 to 4096).
+- **`-ub`**: Physical micro-batch size processed simultaneously on hardware (128 to 2048).
+- **`-t`**: CPU execution threads allocated during generation.
+- **`--port`**: Local HTTP listener port for OpenAI-compatible REST API (default `8082`).
+- **`-ctk` / `-ctv`**: KV cache quantization precision (`q8_0`, `q4_0`, `q4_1`, `f16`).
+- **`--temp` / `--top-p` / `--min-p`**: Sampling randomness and nucleus cutoff thresholds.
+- **`-fa`**: Hardware-accelerated Flash Attention.
+- **`--jinja`**: Native chat templating for formatted prompts and function calling.
 
 ### Hardware & Optimization Flags
-- **`--load-mode mlock`**: Pins model weights and KV memory in physical RAM to prevent Windows pagefile swapping.
-- **`-tb` (Prompt Threads)**: Dedicated CPU threads used to accelerate prompt ingestion and pre-fill processing.
-- **`--fit-target` (VRAM Headroom)**: Reserves a safety margin of VRAM (in MiB) to avoid driver timeouts and out-of-memory errors.
-- **`--cache-reuse`**: Retains and reuses pre-computed KV tokens across multi-turn conversational exchanges.
-- **`-np` (Dedicated Slot)**: Restricts the server to a single dedicated slot to maximize per-user inference throughput.
-- **`--cache-ram`**: Allocates surplus system RAM (in MiB) for context cache overflow beyond VRAM capacity.
-- **`--n-cpu-moe`**: Offloads a specified count of MoE expert layers to CPU/RAM to fit massive Mixture-of-Experts models.
+- **`--load-mode mlock`**: Pins model weights and KV memory in physical RAM to prevent pagefile swapping.
+- **`-tb`**: Dedicated CPU threads used to accelerate prompt ingestion and pre-fill processing.
+- **`--fit-target`**: Reserves a VRAM safety margin (in MiB) to avoid driver out-of-memory errors.
+- **`--cache-reuse`**: Retains and reuses pre-computed KV tokens across multi-turn exchanges.
+- **`-np`**: Restricts the server to a single dedicated slot to maximize per-user throughput.
+- **`--cache-ram`**: Allocates surplus system RAM (in MiB) for context cache overflow beyond VRAM.
+- **`--n-cpu-moe`**: Offloads a specified count of MoE expert layers to CPU/RAM to fit massive models.
 
 ---
 
@@ -72,7 +67,7 @@ Tuned for high-VRAM hardware, including AMD Radeon RX 9070 XT (16 GB VRAM) paire
 | :--- | :--- | :--- | :--- |
 | **Target Use Case** | General reasoning, coding, chat | Lossless recall, critical accuracy | Ultra-fast token generation |
 | **GPU Layers (`-ngl`)** | 99 (All) | 99 (All) | 99 (All) |
-| **Context Size (`-c`)** | 131,072 (128K) | 131,072 (128K) | 32,768 (32K) |
+| **Context Size (`-c`)** | 65,536 (64K) | 131,072 (128K) | 32,768 (32K) |
 | **Batch Size (`-b`)** | 1024 | 1024 | 2048 |
 | **Micro-Batch (`-ub`)** | 256 | 256 | 512 |
 | **KV Cache K / V** | q8_0 / q8_0 | f16 / f16 | q4_0 / q4_0 |
@@ -89,52 +84,23 @@ Tuned for high-VRAM hardware, including AMD Radeon RX 9070 XT (16 GB VRAM) paire
 
 ## Quickstart (No Python Required)
 
-To run Llauncher without installing Python or dependencies:
-
-### 1. Download LLauncher
-Download `LLauncher.exe` from the [Releases](https://github.com/artifyr/LLauncher/releases) page (or grab `dist/LLauncher.exe` from this repository).
-
-### 2. Download llama.cpp (`llama-server.exe`)
-1. Visit the [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) page.
-2. Download the pre-built Windows zip archive matching your graphics hardware:
-   - **AMD Radeon**: `llama-bXXXX-bin-win-vulkan-x64.zip`
-   - **NVIDIA GeForce / RTX**: `llama-bXXXX-bin-win-cuda-cuXX.X-x64.zip`
-   - **Intel / CPU Only**: `llama-bXXXX-bin-win-cpu-x64.zip`
-3. Extract the zip to any folder (e.g. `C:\Tools\llama.cpp\`). Locate `llama-server.exe` inside.
-
-### 3. Download a GGUF Model
-Download any `.gguf` quantized model from Hugging Face (e.g. models by `bartowski`, `Qwen`, or `TheBloke`). For multimodal vision models, also download the matching `mmproj-*.gguf` file to the same folder.
-
-### 4. Run Llauncher
-1. Double-click `LLauncher.exe`.
-2. Click **Browse** next to **llama-server.exe** and select your executable.
-3. Click **Browse** next to **Model GGUF** and select your model file.
-4. Click **Start Model Server**.
-5. Once running, click **Open Web UI** to chat in your browser, or click **Client Configs** to connect frontend apps.
+1. **Download LLauncher**: Download `LLauncher.exe` from [Releases](https://github.com/artifyr/LLauncher/releases) (or grab `dist/LLauncher.exe`).
+2. **Download llama.cpp (`llama-server.exe`)**: Grab pre-built Windows binaries matching your GPU (`vulkan`, `cuda`, or `cpu`) from [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) and extract them.
+3. **Download a GGUF Model**: Download any `.gguf` quantized model from Hugging Face.
+4. **Launch**: Open `LLauncher.exe`, select your `llama-server.exe` and model file, then click **Start Model Server**.
 
 ---
 
-## Running from Source
+## Running from Source & Building
 
 ```bash
-# 1. Clone repository
+# Clone & run from source
 git clone https://github.com/artifyr/LLauncher.git
 cd LLauncher
-
-# 2. Install dependencies
 pip install customtkinter pywinstyles pystray pillow
-
-# 3. Launch application
 python launcher.py
-```
 
----
-
-## Building Standalone Executable
-
-Compile Llauncher into a single standalone `.exe` using PyInstaller:
-
-```bash
+# Build standalone executable
 pyinstaller --clean Llauncher.spec
 ```
 
@@ -144,34 +110,24 @@ The resulting executable is generated at `dist/LLauncher.exe`.
 
 ## Hardware Profiles (Manual Import)
 
-LLauncher includes pre-configured, optimized profile scripts located in the `profiles/` folder, divided into `general/` (dense models with MoE off) and `MoE/` (MoE-specific models with expert offloading and CPU workers). These profiles are **imported manually** (not loaded by default).
-
-To import a profile:
-1. In LLauncher, click **Import .ps1** in the footer.
-2. Navigate to `profiles/general/` or `profiles/MoE/` and select the profile matching your hardware:
+LLauncher includes pre-configured profile scripts located in `profiles/`, split into `general/` (dense models with MoE off) and `MoE/` (MoE-specific models with `--n-cpu-moe 16`). These can be imported via **Import .ps1** in the footer or run directly in PowerShell.
 
 ### General Profiles (`profiles/general/`)
-Universal profiles for dense LLMs (Llama 3, Mistral, Qwen 2.5, Gemma 2, Phi, etc.). MoE CPU offloading is disabled for universal stability.
-
 | Profile Script | Target Hardware | Recommended Context (`-c`) | Batch (`-b` / `-ub`) | Cache Type | Key Optimizations |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `profile_4gb_vram.ps1` | 4 GB VRAM (GTX 1650, RTX 3050 mobile, etc.) | 8,192 tokens | 512 / 128 | `q4_0` | Memory conservative, `--fit-target 256` |
-| `profile_8gb_vram.ps1` | 8 GB VRAM (RTX 3070, 4060, RX 6600, etc.) | 16,384 tokens | 512 / 256 | `q4_0` | `-ngl 99`, `--fit-target 512` |
+| `profile_4gb_vram.ps1` | 4 GB VRAM (GTX 1650, RTX 3050 mobile) | 8,192 tokens | 512 / 128 | `q4_0` | Memory conservative, `--fit-target 256` |
+| `profile_8gb_vram.ps1` | 8 GB VRAM (RTX 3070, 4060, RX 6600) | 16,384 tokens | 512 / 256 | `q4_0` | `-ngl 99`, `--fit-target 512` |
 | `profile_12gb_vram.ps1` | 12 GB VRAM (RTX 3060 12GB, 4070, RX 6700 XT) | 32,768 tokens | 1024 / 256 | `q8_0` | High throughput, `q8_0` KV, `--fit-target 768` |
 | `profile_16gb_vram.ps1` | 16 GB VRAM (RTX 4080, RX 7800 XT, 9070 XT) | 65,536 tokens | 1024 / 256 | `q8_0` | Extended context, high batch throughput |
 | `profile_24gb_vram.ps1` | 24 GB+ VRAM (RTX 3090, RTX 4090, Workstations) | 131,072 tokens | 2048 / 512 | `q8_0` | Maximum context, `mlock`, RAM cache reservation |
 
 ### MoE Profiles (`profiles/MoE/`)
-Tailored for Mixture-of-Experts architectures (Mixtral 8x7B, Mixtral 8x22B, Qwen MoE, DeepSeek MoE, DBRX). Offloads active attention layers to GPU while delegating 16 expert layers to CPU via `--n-cpu-moe 16`.
-
 | Profile Script | Target Hardware | Recommended Context (`-c`) | Batch (`-b` / `-ub`) | Cache Type | Key Optimizations |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `profile_12gb_vram.ps1` | 12 GB VRAM (RTX 3060 12GB, 4070, RX 6700 XT) | 16,384 tokens | 512 / 128 | `q4_0` | Hybrid offload (`-ngl 28`), `--n-cpu-moe 16`, 8GB RAM cache |
-| `profile_16gb_vram.ps1` | 16 GB VRAM (RTX 4080, RX 7800 XT, 9070 XT) | 32,768 tokens | 1024 / 256 | `q8_0` | Accelerated offload (`-ngl 33`), `--n-cpu-moe 16`, prompt threads `-tb 8` |
-| `profile_24gb_vram.ps1` | 24 GB VRAM (RTX 3090, RTX 4090, RX 7900 XTX) | 32,768 tokens | 1024 / 256 | `q8_0` | Full layer offload (`-ngl 99`), `mlock`, 16GB RAM cache, `--n-cpu-moe 16` |
+| `profile_16gb_vram.ps1` | 16 GB VRAM (RTX 4080, RX 7800 XT, 9070 XT) | 32,768 tokens | 1024 / 256 | `q8_0` | Accelerated offload (`-ngl 33`), `--n-cpu-moe 16`, `-tb 8` |
+| `profile_24gb_vram.ps1` | 24 GB VRAM (RTX 3090, RTX 4090, RX 7900 XTX) | 32,768 tokens | 1024 / 256 | `q8_0` | Full offload (`-ngl 99`), `mlock`, 16GB RAM cache, `--n-cpu-moe 16` |
 | `profile_32gb_vram.ps1` | 32 GB+ VRAM (RTX 5090, RTX 6000 Ada, Multi-GPU) | 65,536 tokens | 2048 / 512 | `q8_0` | 64K context, 2048 batch, `mlock`, `--fit-target 1536`, `--n-cpu-moe 16` |
-
-*Note: You can also execute these `.ps1` files directly in PowerShell to launch your llama-server headlessly.*
 
 ---
 
@@ -186,16 +142,7 @@ LLauncher/
 |   \-- LLauncher.exe      # Compiled standalone Windows executable
 |-- profiles/              # Hardware preset scripts (manual import)
 |   |-- general/           # Dense LLM profiles (MoE disabled)
-|   |   |-- profile_4gb_vram.ps1
-|   |   |-- profile_8gb_vram.ps1
-|   |   |-- profile_12gb_vram.ps1
-|   |   |-- profile_16gb_vram.ps1
-|   |   \-- profile_24gb_vram.ps1
 |   \-- MoE/               # Mixture-of-Experts profiles (--n-cpu-moe 16)
-|       |-- profile_12gb_vram.ps1
-|       |-- profile_16gb_vram.ps1
-|       |-- profile_24gb_vram.ps1
-|       \-- profile_32gb_vram.ps1
 |-- launcher.py            # Main application source code
 |-- Llauncher.spec         # PyInstaller build specification
 |-- profiles.json          # Persistent profiles configuration
@@ -209,3 +156,4 @@ LLauncher/
 ## License
 
 This project is open-source under the [MIT License](LICENSE).
+

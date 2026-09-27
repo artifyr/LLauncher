@@ -148,7 +148,7 @@ DEFAULT_PROFILES = [
     {
         "name": "Balanced",
         "ngl": 99,
-        "ctx": 131072,
+        "ctx": 65536,
         "port": "8082",
         "threads": "8",
         "batch": 1024,
