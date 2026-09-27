@@ -28,6 +28,7 @@ Tuned for high-VRAM hardware, including AMD Radeon RX 9070 XT (16 GB VRAM) paire
 - **Embedded Log Console**: Expandable in-window drawer streaming real-time stdout/stderr output from `llama-server.exe` with regex/keyword filtering, auto-scroll, and log copying.
 - **Auto-Restart Watchdog**: Background watchdog that automatically restarts the server within 2 seconds of an unexpected crash or driver timeout, guarded by a 5-attempt circuit breaker.
 - **Export & Import PowerShell Settings**: One-click export to standalone executable `.ps1` or `.bat` scripts with embedded metadata, plus instant import to restore all UI fields from any script.
+- **AI Profile Helper**: Built-in prompt generator allowing users to enter multi-GPU (GPU_1 to GPU_4), CPU, RAM, and model specs to instantly copy an optimization prompt for Grok, ChatGPT, Claude, and other LLMs.
 - **Frontend Integrations & API Tester**: Pre-formatted snippets for Open WebUI, SillyTavern, Continue/Cline, and Hermes Agent, plus an integrated endpoint health checker for `/v1/models` and `/v1/chat/completions`.
 - **3-Slot Hardware Profiles**: Instant switching between Balanced, Max Quality, and Max Performance profiles, with in-place saving and custom profile renaming.
 - **Vulkan Driver Stability**: Automatically injects `GGML_VK_DISABLE_PINNED=1` into the engine environment to prevent GPU driver memory allocation faults.

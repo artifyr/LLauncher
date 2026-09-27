@@ -726,6 +726,348 @@ class EndpointTesterDialog(ctk.CTkToplevel):
         self._append_log("\nEnsure the llama-server is currently running in LLauncher.")
 
 
+class ProfileHelperDialog(ctk.CTkToplevel):
+    """Flyout dialog allowing users to enter system hardware specs and generate/copy an AI optimization prompt."""
+
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.title("Profile Helper - Generate AI Prompt")
+        self.geometry("640x660")
+        self.minsize(580, 560)
+        self.transient(master)
+
+        ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
+        if not os.path.exists(ico_file):
+            ico_file = resource_path("llauncher.ico")
+        if os.path.exists(ico_file):
+            try:
+                self.iconbitmap(ico_file)
+            except Exception:
+                pass
+
+        apply_mica_style(self)
+
+        if master:
+            try:
+                self.update_idletasks()
+                m_x = master.winfo_x()
+                m_y = master.winfo_y()
+                m_w = master.winfo_width()
+                m_h = master.winfo_height()
+                d_w, d_h = 640, 660
+                pos_x = max(0, m_x + (m_w - d_w) // 2)
+                pos_y = max(0, m_y + (m_h - d_h) // 2)
+                self.geometry(f"{d_w}x{d_h}+{pos_x}+{pos_y}")
+            except Exception:
+                pass
+
+        self._build_ui()
+
+    def _build_ui(self):
+        container = ctk.CTkFrame(self, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=20, pady=16)
+
+        # Header Title & Description
+        top_frame = ctk.CTkFrame(container, fg_color="transparent")
+        top_frame.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(
+            top_frame,
+            text="AI Profile Prompt Generator",
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            container,
+            text="Enter your system specifications below. Click 'Copy Prompt' to generate an optimized prompt and paste it directly into Grok, ChatGPT, Claude, or any AI to get a ready-to-import profile script.",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_secondary"],
+            wraplength=590,
+            justify="left",
+        ).pack(fill="x", pady=(0, 12))
+
+        # Specs Card Frame
+        specs_card = ctk.CTkFrame(
+            container,
+            fg_color=THEME["card_bg"],
+            corner_radius=8,
+            border_width=1,
+            border_color=THEME["card_border"],
+        )
+        specs_card.pack(fill="x", pady=(0, 12), padx=2)
+        specs_card.columnconfigure(1, weight=1)
+
+        fields = [
+            ("gpu_1", "GPU_1", "e.g. RTX 4070 Ti Super 16GB, RX 7800 XT 16GB"),
+            ("gpu_2", "GPU_2 (optional)", "e.g. RTX 3060 12GB (or leave blank)"),
+            ("gpu_3", "GPU_3 (optional)", "Secondary card (or leave blank)"),
+            ("gpu_4", "GPU_4 (optional)", "Secondary card (or leave blank)"),
+            ("cpu", "CPU", "e.g. AMD Ryzen 7 7800X3D (8C/16T), Intel i7-14700K"),
+            ("ram", "RAM", "e.g. 32GB DDR5 6000MHz, 64GB DDR4"),
+            ("model", "Target Model (optional)", "e.g. Qwen 2.5 32B Q4_K_M, Mixtral 8x7B"),
+        ]
+
+        self.spec_entries = {}
+
+        for row_idx, (key, label_text, placeholder) in enumerate(fields):
+            lbl = ctk.CTkLabel(
+                specs_card,
+                text=label_text,
+                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                text_color=THEME["text_primary"] if "optional" not in label_text else THEME["text_secondary"],
+                anchor="w",
+                width=140,
+            )
+            lbl.grid(row=row_idx, column=0, padx=(14, 8), pady=5, sticky="w")
+
+            ent = ctk.CTkEntry(
+                specs_card,
+                placeholder_text=placeholder,
+                placeholder_text_color=THEME["text_muted"],
+                fg_color=THEME["input_bg"],
+                border_color=THEME["input_border"],
+                border_width=1,
+                text_color=THEME["text_primary"],
+                corner_radius=6,
+                height=28,
+                font=ctk.CTkFont(family="Segoe UI", size=11),
+            )
+            ent.grid(row=row_idx, column=1, padx=(0, 14), pady=5, sticky="ew")
+            self.spec_entries[key] = ent
+
+        # Prompt Preview Label & Textbox
+        preview_header = ctk.CTkFrame(container, fg_color="transparent")
+        preview_header.pack(fill="x", pady=(2, 4))
+
+        ctk.CTkLabel(
+            preview_header,
+            text="Prompt Preview",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(side="left")
+
+        self.prompt_box = ctk.CTkTextbox(
+            container,
+            height=130,
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_secondary"],
+            font=ctk.CTkFont(family="Consolas", size=10),
+            corner_radius=6,
+            wrap="word",
+        )
+        self.prompt_box.pack(fill="both", expand=True, pady=(0, 12))
+
+        # Bottom Button Row
+        btn_row = ctk.CTkFrame(container, fg_color="transparent")
+        btn_row.pack(fill="x")
+
+        self.copy_btn = ctk.CTkButton(
+            btn_row,
+            text="📋  Copy Prompt to Clipboard",
+            height=36,
+            fg_color=THEME["primary_btn_bg"],
+            hover_color=THEME["primary_btn_hover"],
+            border_width=1,
+            border_color=THEME["primary_btn_border"],
+            text_color=THEME["primary_btn_text"],
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            corner_radius=6,
+            command=self._copy_prompt,
+        )
+        self.copy_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        close_btn = ctk.CTkButton(
+            btn_row,
+            text="Close",
+            height=36,
+            width=90,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            border_width=1,
+            border_color="#3f3f46",
+            text_color="#e4e4e7",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            corner_radius=6,
+            command=self.destroy,
+        )
+        close_btn.pack(side="right")
+
+        # Initial prompt rendering & live binding
+        for ent in self.spec_entries.values():
+            ent.bind("<KeyRelease>", lambda e: self._refresh_prompt())
+
+        self._refresh_prompt()
+
+    def _generate_prompt_text(self) -> str:
+        gpu_1 = self.spec_entries["gpu_1"].get().strip() or "Not specified (Primary GPU)"
+        gpu_2 = self.spec_entries["gpu_2"].get().strip()
+        gpu_3 = self.spec_entries["gpu_3"].get().strip()
+        gpu_4 = self.spec_entries["gpu_4"].get().strip()
+        cpu = self.spec_entries["cpu"].get().strip() or "Standard Multi-core CPU"
+        ram = self.spec_entries["ram"].get().strip() or "Standard System RAM"
+        model = self.spec_entries["model"].get().strip() or "Any LLM (General & MoE architectures)"
+
+        gpu_lines = [f"- Primary GPU (GPU_1): {gpu_1}"]
+        if gpu_2:
+            gpu_lines.append(f"- Secondary GPU (GPU_2): {gpu_2}")
+        if gpu_3:
+            gpu_lines.append(f"- Secondary GPU (GPU_3): {gpu_3}")
+        if gpu_4:
+            gpu_lines.append(f"- Secondary GPU (GPU_4): {gpu_4}")
+        gpu_spec_str = "\n".join(gpu_lines)
+
+        prompt = f"""You are an expert system optimization engineer and high-performance LLM deployment specialist using llama.cpp / llama-server.
+
+TASK:
+Generate a specialized, finetuned, and hardware-optimized profile script for LLauncher (a modern Windows GUI launcher for llama-server).
+
+TARGET SYSTEM SPECIFICATIONS:
+{gpu_spec_str}
+- CPU: {cpu}
+- System RAM: {ram}
+- Target Model / Quant: {model}
+
+STRICT LLAUNCHER COMPATIBILITY RULES & CONSTRAINTS:
+1. The script MUST be written as a valid Windows PowerShell script (`.ps1`).
+2. It MUST contain the executable `$serverArgs` array followed by the exact LLauncher embedded JSON configuration block within `# <LLAUNCHER_SETTINGS_JSON>` tags so LLauncher can parse and import it cleanly.
+3. Allowed values for LLauncher parameters:
+   - ctx_tokens: Must pick from [2048, 4096, 8192, 16384, 24576, 32768, 49152, 65536, 98304, 131072]
+   - ctx_index: Corresponding 0-based index of ctx_tokens (0=2048, 1=4096, 2=8192, 3=16384, 4=24576, 5=32768, 6=49152, 7=65536, 8=98304, 9=131072)
+   - batch_size: Pick from [128, 256, 512, 1024, 2048, 4096]
+   - batch_index: 0-based index (0=128, 1=256, 2=512, 3=1024, 4=2048, 5=4096)
+   - ubatch_size: Pick from [128, 256, 512, 1024, 2048]
+   - ubatch_index: 0-based index (0=128, 1=256, 2=512, 3=1024, 4=2048)
+   - ctk and ctv (KV cache quantization): Must be one of ["q8_0", "q4_0", "q4_1", "f16"]
+   - device: Standard Vulkan or CUDA device identifier (e.g. "Vulkan0" or "CUDA0")
+   - cpu_moe: For dense models, MUST be "enabled": false. For MoE models (Mixtral, DeepSeek MoE, Qwen MoE), set "enabled": true with a reasonable expert layer offload number like "16" or "8".
+   - mlock: Use "enabled": true only if system RAM exceeds total model size to lock pages in memory.
+   - fit_target: Margin in MiB to leave free on the GPU (e.g. 256, 512, 768, 1024, 1536).
+   - cache_reuse: Number of tokens to reuse in KV cache (typically 128 or 256).
+   - cache_ram: Host RAM cache in MiB (e.g. 8192 or 16384).
+
+OUTPUT FORMAT:
+Output ONLY the raw PowerShell script formatted exactly like the template below. Do not wrap in conversational text.
+
+# =====================================================================
+# LLauncher Profile: [Descriptive Profile Name]
+# Target Hardware: [Hardware details]
+# Suggested Models: [Model details]
+# Strategy: [1-sentence explanation of chosen flags]
+# =====================================================================
+
+$env:GGML_VK_DISABLE_PINNED = '1'
+
+$llamaExe = "llama-server.exe"
+
+$serverArgs = @(
+    "--device", "Vulkan0",
+    "-ngl", "<ngl_value>",
+    "-c", "<ctx_value>",
+    "-t", "<threads_value>",
+    "-b", "<batch_value>",
+    "-ub", "<ubatch_value>",
+    "-ctk", "<ctk_value>",
+    "-ctv", "<ctv_value>",
+    "--host", "127.0.0.1",
+    "--port", "8082",
+    "--temp", "<temp_value>",
+    "--top-p", "<topp_value>",
+    "--min-p", "<minp_value>",
+    "-fa", "on",
+    "--jinja",
+    # Add optional flags based on optimizations:
+    # "--load-mode", "mlock",
+    # "-tb", "<prompt_threads>",
+    # "--fit-target", "<mib_margin>",
+    # "--cache-reuse", "<tokens>",
+    # "--cache-ram", "<mib_ram>",
+    # "--n-cpu-moe", "<expert_layers>"
+)
+
+Write-Host "Launching llama-server with [Profile Name]..." -ForegroundColor Cyan
+& $llamaExe @serverArgs
+
+# =====================================================================
+# LLauncher Embedded Settings (For importing back into LLauncher)
+# <LLAUNCHER_SETTINGS_JSON>
+# {{
+#   "version": "1.3.0",
+#   "profile_name": "[Profile Name]",
+#   "device": "Vulkan0",
+#   "ngl": <ngl_int>,
+#   "ctx_index": <ctx_idx_int>,
+#   "ctx_tokens": <ctx_int>,
+#   "batch_index": <batch_idx_int>,
+#   "batch_size": <batch_int>,
+#   "ubatch_index": <ubatch_idx_int>,
+#   "ubatch_size": <ubatch_int>,
+#   "threads": "<threads_str>",
+#   "port": "8082",
+#   "ctk": "<ctk_str>",
+#   "ctv": "<ctv_str>",
+#   "temp": "<temp_str>",
+#   "topp": "<topp_str>",
+#   "minp": "<minp_str>",
+#   "flash_attention": true,
+#   "jinja": true,
+#   "optimizations": {{
+#     "mlock": {{
+#       "enabled": <true_or_false>,
+#       "value": "mlock"
+#     }},
+#     "tb": {{
+#       "enabled": <true_or_false>,
+#       "value": "<prompt_threads>"
+#     }},
+#     "fit_target": {{
+#       "enabled": <true_or_false>,
+#       "value": "<mib_margin>"
+#     }},
+#     "cache_reuse": {{
+#       "enabled": <true_or_false>,
+#       "value": "<tokens>"
+#     }},
+#     "parallel": {{
+#       "enabled": false,
+#       "value": "1"
+#     }},
+#     "cache_ram": {{
+#       "enabled": <true_or_false>,
+#       "value": "<mib_ram>"
+#     }},
+#     "cpu_moe": {{
+#       "enabled": <true_or_false>,
+#       "value": "<moe_layers>"
+#     }}
+#   }}
+# }}
+# </LLAUNCHER_SETTINGS_JSON>
+# =====================================================================
+"""
+        return prompt
+
+    def _refresh_prompt(self):
+        text = self._generate_prompt_text()
+        self.prompt_box.configure(state="normal")
+        self.prompt_box.delete("1.0", "end")
+        self.prompt_box.insert("1.0", text)
+        self.prompt_box.configure(state="disabled")
+
+    def _copy_prompt(self):
+        prompt_text = self._generate_prompt_text()
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(prompt_text)
+            self.update()
+            self.copy_btn.configure(text="✓  Prompt Copied to Clipboard!")
+            self.after(2000, lambda: self.copy_btn.configure(text="📋  Copy Prompt to Clipboard"))
+        except Exception:
+            pass
+
+
 class LlamaLauncher(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -2035,11 +2377,13 @@ class LlamaLauncher(ctk.CTk):
         action_row = ctk.CTkFrame(self.main_container, fg_color="transparent")
         action_row.pack(fill="x", padx=2, pady=(2, 0))
         action_row.columnconfigure(0, weight=3)
+        action_row.columnconfigure(0, weight=3)
         action_row.columnconfigure(1, weight=1)
         action_row.columnconfigure(2, weight=1)
         action_row.columnconfigure(3, weight=1)
         action_row.columnconfigure(4, weight=1)
         action_row.columnconfigure(5, weight=1)
+        action_row.columnconfigure(6, weight=1)
 
         self.start_btn = ctk.CTkButton(
             action_row,
@@ -2130,7 +2474,22 @@ class LlamaLauncher(ctk.CTk):
             corner_radius=8,
             command=self.import_settings,
         )
-        self.import_script_btn.grid(row=0, column=5, sticky="ew")
+        self.import_script_btn.grid(row=0, column=5, sticky="ew", padx=(0, 6))
+
+        self.profile_helper_btn = ctk.CTkButton(
+            action_row,
+            text="✨  Profile Helper",
+            height=42,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=8,
+            command=self.open_profile_helper,
+        )
+        self.profile_helper_btn.grid(row=0, column=6, sticky="ew")
 
     def _build_log_drawer(self):
         """Build bottom collapsible log drawer and desktop ergonomics toolbar."""
@@ -2435,6 +2794,10 @@ class LlamaLauncher(ctk.CTk):
         """Open the API Endpoint Tester & Health Check dialog."""
         port = self.port_entry.get().strip() if hasattr(self, "port_entry") else "8082"
         EndpointTesterDialog(port=port, master=self)
+
+    def open_profile_helper(self):
+        """Open the Profile Helper dialog to generate AI optimization prompts from hardware specs."""
+        ProfileHelperDialog(master=self)
 
     def browse_exe(self):
         f = filedialog.askopenfilename(
