@@ -8,7 +8,7 @@ Lightweight hardware tuner, profile manager, and local inference controller for 
 [![Acceleration](https://img.shields.io/badge/Acceleration-Vulkan%20%7C%20CUDA%20%7C%20CPU-ED1C24)](https://www.vulkan.org)
 [![GUI](https://img.shields.io/badge/GUI-CustomTkinter-blue)](https://github.com/TomSchimansky/CustomTkinter)
 [![Style](https://img.shields.io/badge/Style-Windows%2011%20Mica-gray)](https://github.com/avalon60/pywinstyles)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
 
 ---
 
