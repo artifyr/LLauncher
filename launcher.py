@@ -949,8 +949,9 @@ STRICT LLAUNCHER COMPATIBILITY RULES & CONSTRAINTS:
    - cache_ram: Host RAM cache in MiB (e.g. 8192 or 16384).
 
 OUTPUT FORMAT:
-Output ONLY the raw PowerShell script formatted exactly like the template below. Do not wrap in conversational text.
+Output ONLY the raw PowerShell script formatted exactly like the template below. Do not wrap in conversational text but, wrap it in a codeblock.
 
+```powershell
 # =====================================================================
 # LLauncher Profile: [Descriptive Profile Name]
 # Target Hardware: [Hardware details]
@@ -1046,6 +1047,7 @@ Write-Host "Launching llama-server with [Profile Name]..." -ForegroundColor Cyan
 # }}
 # </LLAUNCHER_SETTINGS_JSON>
 # =====================================================================
+```
 """
         return prompt
 
