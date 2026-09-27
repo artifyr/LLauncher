@@ -16,6 +16,7 @@ import urllib.error
 import customtkinter as ctk
 from tkinter import filedialog
 import struct
+import zipfile
 
 try:
     import pywinstyles
@@ -2095,6 +2096,936 @@ class TunnelDialog(ctk.CTkToplevel):
             self.tunnel_manager.log_lines.clear()
 
 
+class ModelDownloaderDialog(ctk.CTkToplevel):
+    """
+    Hugging Face GGUF Model Explorer & Downloader flyout.
+    Searches repos, queries file trees with quantization sizes, and performs
+    chunked resumable downloads directly into the configured models directory.
+    """
+
+    def __init__(self, master, target_models_dir: str, on_download_complete=None):
+        super().__init__(master)
+        self.master_app = master
+        self.target_dir = os.path.normpath(target_models_dir.strip()) if target_models_dir else ""
+        self.on_download_complete = on_download_complete
+
+        self.title("Hugging Face Model Downloader - LLauncher")
+        self.geometry("780x560")
+        self.minsize(720, 500)
+        self.configure(fg_color=THEME["bg"])
+        self.transient(master)
+
+        ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
+        if not os.path.exists(ico_file):
+            ico_file = resource_path("llauncher.ico")
+        if os.path.exists(ico_file):
+            try:
+                self.iconbitmap(ico_file)
+            except Exception:
+                pass
+
+        apply_mica_style(self)
+
+        self._active_download_thread = None
+        self._cancel_requested = False
+        self._found_files = []
+
+        self._build_ui()
+
+    def _build_ui(self):
+        main = ctk.CTkFrame(self, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=16, pady=14)
+
+        # Header Title
+        hdr = ctk.CTkFrame(main, fg_color="transparent")
+        hdr.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(
+            hdr,
+            text="HUGGING FACE MODEL EXPLORER & DOWNLOADER",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(side="left")
+
+        dest_display = self.target_dir if self.target_dir else "Current App Folder"
+        dest_lbl = ctk.CTkLabel(
+            hdr,
+            text=f"Target Folder: {dest_display}",
+            font=ctk.CTkFont(family="Segoe UI", size=10),
+            text_color=THEME["text_muted"],
+        )
+        dest_lbl.pack(side="right")
+        ToolTip(dest_lbl, "Models will be saved directly into your configured Models Folder")
+
+        # Search Bar Card
+        search_card = ctk.CTkFrame(
+            main,
+            fg_color=THEME["card_bg"],
+            border_width=1,
+            border_color=THEME["card_border"],
+            corner_radius=8,
+        )
+        search_card.pack(fill="x", pady=(0, 10))
+
+        s_box = ctk.CTkFrame(search_card, fg_color="transparent")
+        s_box.pack(fill="x", padx=10, pady=10)
+
+        ctk.CTkLabel(
+            s_box,
+            text="HF Repo or Query:",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_secondary"],
+        ).pack(side="left", padx=(0, 8))
+
+        self.repo_entry = ctk.CTkEntry(
+            s_box,
+            placeholder_text="e.g. Qwen/Qwen2.5-3B-Instruct-GGUF or search 'llama-3.2'",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_primary"],
+            height=30,
+        )
+        self.repo_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.repo_entry.insert(0, "Qwen/Qwen2.5-3B-Instruct-GGUF")
+        self.repo_entry.bind("<Return>", lambda _: self._fetch_repo())
+        ToolTip(self.repo_entry, "Enter an exact repo ID (User/Repo) or keywords to search Hugging Face")
+
+        self.search_btn = ctk.CTkButton(
+            s_box,
+            text="Explore Repo",
+            width=110,
+            height=30,
+            fg_color=THEME["primary_btn_bg"],
+            hover_color=THEME["primary_btn_hover"],
+            text_color=THEME["primary_btn_text"],
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=6,
+            command=self._fetch_repo,
+        )
+        self.search_btn.pack(side="left", padx=(0, 6))
+
+        self.find_repos_btn = ctk.CTkButton(
+            s_box,
+            text="Search HF",
+            width=90,
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=6,
+            command=self._search_huggingface,
+        )
+        self.find_repos_btn.pack(side="left")
+
+        # Status & File List Container
+        self.list_card = ctk.CTkFrame(
+            main,
+            fg_color=THEME["card_bg"],
+            border_width=1,
+            border_color=THEME["card_border"],
+            corner_radius=8,
+        )
+        self.list_card.pack(fill="both", expand=True, pady=(0, 10))
+
+        # List Header row
+        list_hdr = ctk.CTkFrame(self.list_card, fg_color="transparent")
+        list_hdr.pack(fill="x", padx=10, pady=(8, 4))
+
+        self.results_title_lbl = ctk.CTkLabel(
+            list_hdr,
+            text="AVAILABLE GGUF FILES IN REPO",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color=THEME["text_muted"],
+        )
+        self.results_title_lbl.pack(side="left")
+
+        self.status_feedback_lbl = ctk.CTkLabel(
+            list_hdr,
+            text="Enter a repo and click 'Explore Repo'",
+            font=ctk.CTkFont(family="Segoe UI", size=10),
+            text_color=THEME["text_secondary"],
+        )
+        self.status_feedback_lbl.pack(side="right")
+
+        # Scrollable Frame for Model Files / Search Results
+        self.scroll_frame = ctk.CTkScrollableFrame(
+            self.list_card,
+            fg_color="#0e0e11",
+            corner_radius=6,
+            border_width=1,
+            border_color="#222226",
+        )
+        self.scroll_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        # Download Progress Card
+        prog_card = ctk.CTkFrame(
+            main,
+            fg_color=THEME["card_bg"],
+            border_width=1,
+            border_color=THEME["card_border"],
+            corner_radius=8,
+        )
+        prog_card.pack(fill="x")
+
+        p_inner = ctk.CTkFrame(prog_card, fg_color="transparent")
+        p_inner.pack(fill="x", padx=10, pady=8)
+
+        # Top progress row: filename & speed/eta
+        p_top = ctk.CTkFrame(p_inner, fg_color="transparent")
+        p_top.pack(fill="x", pady=(0, 4))
+
+        self.dl_status_lbl = ctk.CTkLabel(
+            p_top,
+            text="Ready to download",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_primary"],
+        )
+        self.dl_status_lbl.pack(side="left")
+
+        self.dl_stats_lbl = ctk.CTkLabel(
+            p_top,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_secondary"],
+        )
+        self.dl_stats_lbl.pack(side="right")
+
+        # Progress bar & Cancel button
+        p_bar_box = ctk.CTkFrame(p_inner, fg_color="transparent")
+        p_bar_box.pack(fill="x")
+
+        self.progress_bar = ctk.CTkProgressBar(
+            p_bar_box,
+            height=8,
+            corner_radius=4,
+            fg_color="#27272a",
+            progress_color="#10b981",
+        )
+        self.progress_bar.set(0.0)
+        self.progress_bar.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self.cancel_btn = ctk.CTkButton(
+            p_bar_box,
+            text="Cancel",
+            width=75,
+            height=26,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            text_color=THEME["text_primary"],
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            corner_radius=6,
+            command=self._cancel_download,
+            state="disabled",
+        )
+        self.cancel_btn.pack(side="right")
+
+        # Automatically fetch initial repo
+        self.after(200, self._fetch_repo)
+
+    def _clear_scroll_frame(self):
+        for widget in self.scroll_frame.winfo_children():
+            widget.destroy()
+
+    def _search_huggingface(self):
+        """Search Hugging Face models by query keyword."""
+        query = self.repo_entry.get().strip()
+        if not query:
+            return
+
+        self.search_btn.configure(state="disabled")
+        self.find_repos_btn.configure(state="disabled", text="Searching...")
+        self.status_feedback_lbl.configure(text=f"Searching Hugging Face for '{query}'...")
+        self._clear_scroll_frame()
+
+        def worker():
+            encoded = urllib.parse.quote(query)
+            api_url = f"https://huggingface.co/api/models?search={encoded}&filter=gguf&limit=15&sort=downloads&direction=-1"
+            req = urllib.request.Request(api_url, headers={"User-Agent": "LLauncher/1.6.0"})
+            results = []
+            err_msg = ""
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    results = json.loads(resp.read().decode("utf-8"))
+            except Exception as e:
+                err_msg = str(e)
+
+            def update_ui():
+                self.search_btn.configure(state="normal")
+                self.find_repos_btn.configure(state="normal", text="Search HF")
+                self.results_title_lbl.configure(text="SEARCH RESULTS (CLICK TO EXPLORE)")
+
+                if err_msg:
+                    self.status_feedback_lbl.configure(text=f"Search failed: {err_msg}")
+                    return
+
+                if not results:
+                    self.status_feedback_lbl.configure(text="No GGUF models matched your query.")
+                    return
+
+                self.status_feedback_lbl.configure(text=f"Found {len(results)} matching repos")
+
+                for item in results:
+                    repo_id = item.get("id", "")
+                    downloads = item.get("downloads", 0)
+                    likes = item.get("likes", 0)
+
+                    row = ctk.CTkFrame(self.scroll_frame, fg_color="#18181b", corner_radius=6)
+                    row.pack(fill="x", padx=4, pady=3)
+
+                    info_box = ctk.CTkFrame(row, fg_color="transparent")
+                    info_box.pack(side="left", padx=10, pady=8, fill="x", expand=True)
+
+                    name_lbl = ctk.CTkLabel(
+                        info_box,
+                        text=repo_id,
+                        font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                        text_color=THEME["text_primary"],
+                        anchor="w",
+                    )
+                    name_lbl.pack(anchor="w")
+
+                    stats_lbl = ctk.CTkLabel(
+                        info_box,
+                        text=f"⬇ {downloads:,} downloads  |  ❤️ {likes:,} likes",
+                        font=ctk.CTkFont(family="Segoe UI", size=10),
+                        text_color=THEME["text_muted"],
+                        anchor="w",
+                    )
+                    stats_lbl.pack(anchor="w")
+
+                    sel_btn = ctk.CTkButton(
+                        row,
+                        text="Explore",
+                        width=75,
+                        height=26,
+                        fg_color=THEME["secondary_btn_bg"],
+                        hover_color=THEME["secondary_btn_hover"],
+                        text_color=THEME["secondary_btn_text"],
+                        font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+                        corner_radius=5,
+                        command=lambda r=repo_id: self._select_searched_repo(r),
+                    )
+                    sel_btn.pack(side="right", padx=10)
+
+            self.after(0, update_ui)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _select_searched_repo(self, repo_id: str):
+        self.repo_entry.delete(0, "end")
+        self.repo_entry.insert(0, repo_id)
+        self._fetch_repo()
+
+    def _fetch_repo(self):
+        """Query Hugging Face repository API for available GGUF files."""
+        repo_id = self.repo_entry.get().strip()
+        if not repo_id:
+            return
+
+        # Clean any trailing slashes or full URLs
+        repo_id = re.sub(r"^https?://huggingface\.co/", "", repo_id).strip("/")
+
+        self.search_btn.configure(state="disabled", text="Exploring...")
+        self.find_repos_btn.configure(state="disabled")
+        self.status_feedback_lbl.configure(text=f"Querying files for '{repo_id}'...")
+        self._clear_scroll_frame()
+
+        def worker():
+            api_url = f"https://huggingface.co/api/models/{repo_id}/tree/main"
+            req = urllib.request.Request(api_url, headers={"User-Agent": "LLauncher/1.6.0"})
+            files_found = []
+            err_msg = ""
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    tree_data = json.loads(resp.read().decode("utf-8"))
+                    for item in tree_data:
+                        path = item.get("path", "")
+                        if path.lower().endswith(".gguf"):
+                            files_found.append({
+                                "filename": path,
+                                "size": item.get("size", 0),
+                                "download_url": f"https://huggingface.co/{repo_id}/resolve/main/{path}",
+                            })
+            except Exception as e:
+                err_msg = str(e)
+
+            def update_ui():
+                self.search_btn.configure(state="normal", text="Explore Repo")
+                self.find_repos_btn.configure(state="normal")
+                self.results_title_lbl.configure(text=f"AVAILABLE GGUF FILES IN {repo_id.upper()}")
+
+                if err_msg:
+                    self.status_feedback_lbl.configure(text=f"Failed to inspect repo: {err_msg}")
+                    return
+
+                if not files_found:
+                    self.status_feedback_lbl.configure(text="No .gguf files discovered in main branch.")
+                    return
+
+                # Sort by size descending
+                files_found.sort(key=lambda x: x["size"], reverse=True)
+                self._found_files = files_found
+                self.status_feedback_lbl.configure(text=f"Discovered {len(files_found)} GGUF quantizations")
+
+                for item in files_found:
+                    fname = item["filename"]
+                    fsize = item["size"]
+                    furl = item["download_url"]
+
+                    sz_str = LlamaLauncher._format_file_size(fsize) if fsize > 0 else "Unknown Size"
+
+                    row = ctk.CTkFrame(self.scroll_frame, fg_color="#18181b", corner_radius=6)
+                    row.pack(fill="x", padx=4, pady=3)
+
+                    info_box = ctk.CTkFrame(row, fg_color="transparent")
+                    info_box.pack(side="left", padx=10, pady=8, fill="x", expand=True)
+
+                    name_lbl = ctk.CTkLabel(
+                        info_box,
+                        text=fname,
+                        font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                        text_color=THEME["text_primary"],
+                        anchor="w",
+                    )
+                    name_lbl.pack(anchor="w")
+
+                    # Identify quant tag
+                    tag_match = re.search(r"[-_.](q\d+_[a-z0-9_]+|f16|bf16|iq\d+_[a-z0-9_]+)", fname, re.IGNORECASE)
+                    tag_str = tag_match.group(1).upper() if tag_match else "GGUF"
+
+                    size_lbl = ctk.CTkLabel(
+                        info_box,
+                        text=f"Size: {sz_str}  |  Quant: {tag_str}",
+                        font=ctk.CTkFont(family="Segoe UI", size=10),
+                        text_color=THEME["text_secondary"],
+                        anchor="w",
+                    )
+                    size_lbl.pack(anchor="w")
+
+                    # Check if already downloaded
+                    dest_file = os.path.join(self.target_dir, fname) if self.target_dir else fname
+                    is_present = os.path.isfile(dest_file) and os.path.getsize(dest_file) >= (fsize * 0.98 if fsize > 0 else 1)
+
+                    if is_present:
+                        state_btn = ctk.CTkButton(
+                            row,
+                            text="✓ Downloaded",
+                            width=100,
+                            height=26,
+                            fg_color="#27272a",
+                            hover_color="#27272a",
+                            text_color="#10b981",
+                            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+                            corner_radius=5,
+                            command=lambda p=dest_file: self._load_downloaded_model(p),
+                        )
+                        state_btn.pack(side="right", padx=10)
+                        ToolTip(state_btn, "Already present in your models folder. Click to load into launcher.")
+                    else:
+                        dl_btn = ctk.CTkButton(
+                            row,
+                            text="⬇ Download",
+                            width=95,
+                            height=26,
+                            fg_color=THEME["primary_btn_bg"],
+                            hover_color=THEME["primary_btn_hover"],
+                            text_color=THEME["primary_btn_text"],
+                            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+                            corner_radius=5,
+                            command=lambda u=furl, fn=fname, sz=fsize: self._start_download(u, fn, sz),
+                        )
+                        dl_btn.pack(side="right", padx=10)
+                        ToolTip(dl_btn, f"Download directly into {self.target_dir or 'current directory'}")
+
+            self.after(0, update_ui)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _start_download(self, url: str, filename: str, expected_size: int):
+        """Initiate chunked resumable download in background thread."""
+        if self._active_download_thread and self._active_download_thread.is_alive():
+            return
+
+        target_dir = self.target_dir if (self.target_dir and os.path.isdir(self.target_dir)) else os.getcwd()
+        dest_filepath = os.path.normpath(os.path.join(target_dir, filename))
+
+        self._cancel_requested = False
+        self.cancel_btn.configure(state="normal")
+        self.dl_status_lbl.configure(text=f"Connecting: {filename[:36]}...", text_color=THEME["text_primary"])
+        self.progress_bar.set(0.0)
+
+        def download_worker():
+            downloaded_bytes = 0
+            part_filepath = dest_filepath + ".part"
+
+            # Check existing partial download for resume
+            if os.path.isfile(part_filepath):
+                try:
+                    downloaded_bytes = os.path.getsize(part_filepath)
+                except Exception:
+                    downloaded_bytes = 0
+
+            req_headers = {"User-Agent": "LLauncher/1.6.0"}
+            if downloaded_bytes > 0:
+                req_headers["Range"] = f"bytes={downloaded_bytes}-"
+
+            req = urllib.request.Request(url, headers=req_headers)
+            chunk_size = 1024 * 1024  # 1MB chunks
+
+            start_time = time.time()
+            last_calc_time = start_time
+            bytes_since_last_calc = 0
+            speed_mb = 0.0
+
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    status_code = getattr(resp, "status", 200)
+
+                    # Determine total content length
+                    if status_code == 206:
+                        # Resumed partial content
+                        crange = resp.headers.get("Content-Range", "")
+                        total_bytes = int(crange.split("/")[-1]) if "/" in crange else (downloaded_bytes + int(resp.headers.get("Content-Length", 0)))
+                        mode = "ab"
+                    else:
+                        downloaded_bytes = 0
+                        total_bytes = int(resp.headers.get("Content-Length", expected_size))
+                        mode = "wb"
+
+                    with open(part_filepath, mode) as out_f:
+                        while not self._cancel_requested:
+                            chunk = resp.read(chunk_size)
+                            if not chunk:
+                                break
+
+                            out_f.write(chunk)
+                            downloaded_bytes += len(chunk)
+                            bytes_since_last_calc += len(chunk)
+
+                            now = time.time()
+                            if now - last_calc_time >= 0.6:
+                                dt = now - last_calc_time
+                                speed_mb = (bytes_since_last_calc / (1024 * 1024)) / dt
+                                bytes_since_last_calc = 0
+                                last_calc_time = now
+
+                                ratio = min(downloaded_bytes / max(total_bytes, 1), 1.0)
+                                remaining_bytes = max(total_bytes - downloaded_bytes, 0)
+                                eta_s = int(remaining_bytes / max(speed_mb * 1024 * 1024, 1)) if speed_mb > 0.05 else 0
+
+                                dl_gb = downloaded_bytes / (1024 ** 3)
+                                tot_gb = total_bytes / (1024 ** 3)
+
+                                def update_progress(r=ratio, cur=dl_gb, tot=tot_gb, sp=speed_mb, eta=eta_s):
+                                    self.progress_bar.set(r)
+                                    eta_str = f"{eta // 60}m {eta % 60}s" if eta >= 60 else f"{eta}s"
+                                    self.dl_status_lbl.configure(text=f"Downloading {filename[:30]} ({cur:.2f}/{tot:.2f} GB - {int(r*100)}%)")
+                                    self.dl_stats_lbl.configure(text=f"⚡ {sp:.1f} MB/s  |  ETA: {eta_str}")
+
+                                self.after(0, update_progress)
+
+                if self._cancel_requested:
+                    def on_cancelled():
+                        self.cancel_btn.configure(state="disabled")
+                        self.dl_status_lbl.configure(text="Download paused / cancelled. Progress preserved.", text_color="#facc15")
+                        self.dl_stats_lbl.configure(text="")
+                    self.after(0, on_cancelled)
+                    return
+
+                # Rename .part to final destination
+                if os.path.exists(dest_filepath):
+                    try:
+                        os.remove(dest_filepath)
+                    except Exception:
+                        pass
+                os.rename(part_filepath, dest_filepath)
+
+                def on_done():
+                    self.cancel_btn.configure(state="disabled")
+                    self.progress_bar.set(1.0)
+                    self.dl_status_lbl.configure(text=f"✓ Download Complete: {filename}", text_color="#10b981")
+                    self.dl_stats_lbl.configure(text="Saved to Models Folder")
+
+                    # Refresh models folder & select model in launcher
+                    if self.on_download_complete:
+                        self.on_download_complete(dest_filepath)
+
+                    # Re-render list to reflect downloaded state
+                    self._fetch_repo()
+
+                self.after(0, on_done)
+
+            except Exception as e:
+                def on_error(err=str(e)):
+                    self.cancel_btn.configure(state="disabled")
+                    self.dl_status_lbl.configure(text=f"Download Error: {err[:40]}", text_color="#f87171")
+                    self.dl_stats_lbl.configure(text="Click Download to resume")
+                self.after(0, on_error)
+
+        self._active_download_thread = threading.Thread(target=download_worker, daemon=True)
+        self._active_download_thread.start()
+
+    def _cancel_download(self):
+        self._cancel_requested = True
+        self.cancel_btn.configure(state="disabled")
+        self.dl_status_lbl.configure(text="Pausing download...")
+
+    def _load_downloaded_model(self, filepath: str):
+        if self.on_download_complete:
+            self.on_download_complete(filepath)
+            self.destroy()
+
+
+class LlamaUpdaterDialog(ctk.CTkToplevel):
+    """
+    In-App llama.cpp Release Updater dialog.
+    Queries GitHub releases for ggml-org/llama.cpp, detects active backend
+    (Vulkan, CUDA, CPU), compares build numbers, and downloads/extracts updates.
+    """
+
+    def __init__(self, master, current_exe_path: str, on_update_complete=None):
+        super().__init__(master)
+        self.master_app = master
+        self.current_exe = current_exe_path
+        self.on_update_complete = on_update_complete
+
+        self.title("llama.cpp Binary Updater - LLauncher")
+        self.geometry("640x480")
+        self.minsize(580, 420)
+        self.configure(fg_color=THEME["bg"])
+        self.transient(master)
+
+        ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
+        if not os.path.exists(ico_file):
+            ico_file = resource_path("llauncher.ico")
+        if os.path.exists(ico_file):
+            try:
+                self.iconbitmap(ico_file)
+            except Exception:
+                pass
+
+        apply_mica_style(self)
+
+        self._current_build = self._detect_current_build()
+        self._latest_release = None
+        self._matching_asset = None
+
+        self._build_ui()
+        self.after(150, self._check_updates)
+
+    def _detect_current_build(self) -> str:
+        """Inspect current llama-server.exe version string via CLI."""
+        if not self.current_exe or not os.path.isfile(self.current_exe):
+            return "Unknown"
+        try:
+            no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            res = subprocess.run([self.current_exe, "--version"], capture_output=True, text=True, timeout=3, creationflags=no_window)
+            m = re.search(r"version:\s*(\d+|b\d+)", res.stdout or res.stderr)
+            if m:
+                v = m.group(1)
+                return v if v.startswith("b") else f"b{v}"
+            # Check path or folder for bXXXX
+            path_m = re.search(r"(b\d{4,5})", self.current_exe)
+            if path_m:
+                return path_m.group(1)
+        except Exception:
+            pass
+        return "b3500 (Legacy)"
+
+    def _detect_backend_type(self) -> str:
+        """Detect whether installed binary is Vulkan, CUDA, or CPU."""
+        exe_lower = self.current_exe.lower()
+        if "cuda" in exe_lower:
+            return "cuda"
+        if "vulkan" in exe_lower:
+            return "vulkan"
+        # Check active device in launcher
+        if hasattr(self.master_app, "device_dropdown"):
+            dev = self.master_app.device_dropdown.get().lower()
+            if "vulkan" in dev:
+                return "vulkan"
+            if "cuda" in dev:
+                return "cuda"
+        return "vulkan"  # Default optimal backend for Windows
+
+    def _build_ui(self):
+        main = ctk.CTkFrame(self, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=16, pady=14)
+
+        # Header Title
+        ctk.CTkLabel(
+            main,
+            text="LLAMA.CPP BINARY RELEASE UPDATER",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(anchor="w", pady=(0, 10))
+
+        # Status Card
+        card = ctk.CTkFrame(
+            main,
+            fg_color=THEME["card_bg"],
+            border_width=1,
+            border_color=THEME["card_border"],
+            corner_radius=8,
+        )
+        card.pack(fill="both", expand=True, pady=(0, 10))
+
+        c_inner = ctk.CTkFrame(card, fg_color="transparent")
+        c_inner.pack(fill="both", expand=True, padx=12, pady=12)
+
+        # Version comparisons grid
+        grid = ctk.CTkFrame(c_inner, fg_color="transparent")
+        grid.pack(fill="x", pady=(0, 12))
+        grid.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(grid, text="Installed Binary:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=THEME["text_secondary"]).grid(row=0, column=0, sticky="w", pady=4)
+        self.installed_lbl = ctk.CTkLabel(grid, text=f"{self.current_exe} ({self._current_build})", font=ctk.CTkFont(family="Segoe UI", size=11), text_color=THEME["text_primary"], anchor="w")
+        self.installed_lbl.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=4)
+
+        ctk.CTkLabel(grid, text="Latest GitHub Build:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=THEME["text_secondary"]).grid(row=1, column=0, sticky="w", pady=4)
+        self.latest_lbl = ctk.CTkLabel(grid, text="Checking GitHub API...", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#facc15", anchor="w")
+        self.latest_lbl.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=4)
+
+        ctk.CTkLabel(grid, text="Target Backend:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=THEME["text_secondary"]).grid(row=2, column=0, sticky="w", pady=4)
+        self.backend_menu = ctk.CTkOptionMenu(
+            grid,
+            values=["Vulkan (Universal AMD / NVIDIA / Intel)", "CUDA 12.4 (NVIDIA GPUs)", "CPU (AVX2 / No GPU)"],
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            fg_color=THEME["input_bg"],
+            button_color="#27272a",
+            button_hover_color="#3f3f46",
+            text_color=THEME["text_primary"],
+            dropdown_fg_color=THEME["dropdown_bg"],
+            dropdown_text_color=THEME["text_primary"],
+            height=28,
+            command=self._on_backend_change,
+        )
+        detected_be = self._detect_backend_type()
+        if detected_be == "cuda":
+            self.backend_menu.set("CUDA 12.4 (NVIDIA GPUs)")
+        elif detected_be == "cpu":
+            self.backend_menu.set("CPU (AVX2 / No GPU)")
+        else:
+            self.backend_menu.set("Vulkan (Universal AMD / NVIDIA / Intel)")
+        self.backend_menu.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=4)
+
+        # Release Notes / Details Box
+        ctk.CTkLabel(
+            c_inner,
+            text="RELEASE PACKAGE DETAILS",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color=THEME["text_muted"],
+        ).pack(anchor="w", pady=(4, 2))
+
+        self.details_box = ctk.CTkTextbox(
+            c_inner,
+            fg_color="#0e0e11",
+            border_color="#222226",
+            border_width=1,
+            text_color=THEME["text_secondary"],
+            font=ctk.CTkFont(family="Consolas", size=10),
+            corner_radius=6,
+            height=120,
+        )
+        self.details_box.pack(fill="both", expand=True, pady=(0, 4))
+        self.details_box.insert("1.0", "Connecting to GitHub Releases API...")
+        self.details_box.configure(state="disabled")
+
+        # Progress bar
+        self.progress_bar = ctk.CTkProgressBar(
+            main,
+            height=6,
+            corner_radius=3,
+            fg_color="#27272a",
+            progress_color="#10b981",
+        )
+        self.progress_bar.set(0.0)
+        self.progress_bar.pack(fill="x", pady=(0, 10))
+
+        # Bottom Action Bar
+        act_bar = ctk.CTkFrame(main, fg_color="transparent")
+        act_bar.pack(fill="x")
+
+        self.status_msg_lbl = ctk.CTkLabel(
+            act_bar,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_secondary"],
+        )
+        self.status_msg_lbl.pack(side="left")
+
+        self.close_btn = ctk.CTkButton(
+            act_bar,
+            text="Close",
+            width=80,
+            height=32,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            text_color=THEME["text_primary"],
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6,
+            command=self.destroy,
+        )
+        self.close_btn.pack(side="right", padx=(8, 0))
+
+        self.update_btn = ctk.CTkButton(
+            act_bar,
+            text="⚡ Update to Latest Build",
+            width=180,
+            height=32,
+            fg_color=THEME["primary_btn_bg"],
+            hover_color=THEME["primary_btn_hover"],
+            text_color=THEME["primary_btn_text"],
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=6,
+            command=self._perform_update,
+            state="disabled",
+        )
+        self.update_btn.pack(side="right")
+
+    def _check_updates(self):
+        """Query GitHub Releases API for ggml-org/llama.cpp."""
+        def worker():
+            api_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5"
+            req = urllib.request.Request(api_url, headers={"User-Agent": "LLauncher/1.6.0"})
+            rel_data = []
+            err_msg = ""
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    rel_data = json.loads(resp.read().decode("utf-8"))
+            except Exception as e:
+                err_msg = str(e)
+
+            def update_ui():
+                if err_msg or not rel_data:
+                    self.latest_lbl.configure(text=f"Failed to check: {err_msg or 'No releases'}", text_color="#f87171")
+                    return
+
+                self._latest_release = rel_data[0]
+                tag = self._latest_release.get("tag_name", "")
+                self.latest_lbl.configure(text=f"{tag} (Latest)", text_color="#10b981")
+                self._resolve_matching_asset()
+
+            self.after(0, update_ui)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_backend_change(self, choice):
+        self._resolve_matching_asset()
+
+    def _resolve_matching_asset(self):
+        if not self._latest_release:
+            return
+
+        choice = self.backend_menu.get().lower()
+        if "cuda" in choice:
+            keyword = "cuda-12.4-x64.zip"
+        elif "cpu" in choice:
+            keyword = "cpu-x64.zip"
+        else:
+            keyword = "vulkan-x64.zip"
+
+        assets = self._latest_release.get("assets", [])
+        matched = None
+        for a in assets:
+            name = a.get("name", "").lower()
+            if keyword in name:
+                matched = a
+                break
+
+        self._matching_asset = matched
+
+        self.details_box.configure(state="normal")
+        self.details_box.delete("1.0", "end")
+
+        if matched:
+            size_mb = matched.get("size", 0) / (1024 * 1024)
+            info = f"Package: {matched.get('name')}\nSize: {size_mb:.1f} MB\nRelease Tag: {self._latest_release.get('tag_name')}\nPublished: {self._latest_release.get('published_at')[:10]}\n\nClick 'Update to Latest Build' to download and extract automatically."
+            self.details_box.insert("1.0", info)
+            self.update_btn.configure(state="normal")
+            self.status_msg_lbl.configure(text="Ready to install update")
+        else:
+            self.details_box.insert("1.0", f"No pre-compiled package found matching '{keyword}' in release {self._latest_release.get('tag_name')}.")
+            self.update_btn.configure(state="disabled")
+
+        self.details_box.configure(state="disabled")
+
+    def _perform_update(self):
+        """Download release zip, extract llama-server.exe and DLLs into bin/ folder, and update path."""
+        if not self._matching_asset:
+            return
+
+        url = self._matching_asset.get("browser_download_url")
+        asset_name = self._matching_asset.get("name")
+        self.update_btn.configure(state="disabled", text="Updating...")
+        self.backend_menu.configure(state="disabled")
+        self.status_msg_lbl.configure(text="Downloading binary archive...")
+
+        def worker():
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            bin_dir = os.path.join(app_dir, "bin")
+            os.makedirs(bin_dir, exist_ok=True)
+            zip_dest = os.path.join(bin_dir, asset_name)
+
+            try:
+                # Download archive with progress tracking
+                req = urllib.request.Request(url, headers={"User-Agent": "LLauncher/1.6.0"})
+                with urllib.request.urlopen(req, timeout=25) as resp, open(zip_dest, "wb") as out_f:
+                    total_sz = int(resp.headers.get("Content-Length", 0))
+                    read_sz = 0
+                    chunk_sz = 512 * 1024
+                    while True:
+                        buf = resp.read(chunk_sz)
+                        if not buf:
+                            break
+                        out_f.write(buf)
+                        read_sz += len(buf)
+                        if total_sz > 0:
+                            ratio = min(read_sz / total_sz, 1.0)
+                            self.after(0, lambda r=ratio: self.progress_bar.set(r))
+
+                self.after(0, lambda: self.status_msg_lbl.configure(text="Extracting binaries..."))
+
+                # Extract zip archive
+                new_server_exe = None
+                with zipfile.ZipFile(zip_dest, "r") as z:
+                    z.extractall(bin_dir)
+                    for item in z.namelist():
+                        if item.lower().endswith("llama-server.exe"):
+                            new_server_exe = os.path.normpath(os.path.join(bin_dir, item))
+
+                # Clean up downloaded zip archive
+                try:
+                    os.remove(zip_dest)
+                except Exception:
+                    pass
+
+                def on_done():
+                    self.progress_bar.set(1.0)
+                    self.update_btn.configure(text="✓ Updated", state="disabled")
+                    self.status_msg_lbl.configure(text="Update successfully installed!", text_color="#10b981")
+                    if new_server_exe and os.path.isfile(new_server_exe):
+                        if self.on_update_complete:
+                            self.on_update_complete(new_server_exe)
+                    self.after(1600, self.destroy)
+
+                self.after(0, on_done)
+
+            except Exception as e:
+                def on_err(err=str(e)):
+                    self.update_btn.configure(text="Retry Update", state="normal")
+                    self.backend_menu.configure(state="normal")
+                    self.status_msg_lbl.configure(text=f"Update failed: {err[:40]}", text_color="#f87171")
+                self.after(0, on_err)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
 class LlamaLauncher(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -3233,10 +4164,13 @@ class LlamaLauncher(ctk.CTk):
         self.exe_entry.insert(0, self.llama_exe)
         self.exe_entry.grid(row=0, column=1, sticky="ew", padx=(4, 8), pady=(8, 4))
 
+        exe_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        exe_btn_frame.grid(row=0, column=2, sticky="e", padx=(0, 12), pady=(8, 4))
+
         self.browse_exe_btn = ctk.CTkButton(
-            card,
+            exe_btn_frame,
             text="Browse",
-            width=85,
+            width=50,
             height=30,
             fg_color=THEME["secondary_btn_bg"],
             hover_color=THEME["secondary_btn_hover"],
@@ -3244,10 +4178,26 @@ class LlamaLauncher(ctk.CTk):
             border_color=THEME["secondary_btn_border"],
             text_color=THEME["secondary_btn_text"],
             corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             command=self.browse_exe,
         )
-        self.browse_exe_btn.grid(row=0, column=2, sticky="e", padx=(0, 12), pady=(8, 4))
+        self.browse_exe_btn.pack(side="left", padx=(0, 4))
+
+        self.update_exe_btn = ctk.CTkButton(
+            exe_btn_frame,
+            text="🔄 Update",
+            width=65,
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self.open_llama_updater,
+        )
+        self.update_exe_btn.pack(side="left")
 
         # Row 1: Models Folder (Configurable Directory)
         ctk.CTkLabel(
@@ -3277,6 +4227,22 @@ class LlamaLauncher(ctk.CTk):
 
         folder_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
         folder_btn_frame.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 5))
+
+        self.download_model_btn = ctk.CTkButton(
+            folder_btn_frame,
+            text="⬇ HF Models",
+            width=78,
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self.open_model_downloader,
+        )
+        self.download_model_btn.pack(side="left", padx=(0, 4))
 
         self.browse_dir_btn = ctk.CTkButton(
             folder_btn_frame,
@@ -4613,7 +5579,9 @@ class LlamaLauncher(ctk.CTk):
             # Paths Card
             "exe_entry": "Path to llama-server.exe executable binary",
             "browse_exe_btn": "Browse filesystem for llama-server.exe",
+            "update_exe_btn": "Check and install latest llama-server binary release from GitHub",
             "models_dir_entry": "Folder containing .gguf models for auto-scanning",
+            "download_model_btn": "Explore, search, and download GGUF models directly from Hugging Face",
             "browse_dir_btn": "Select folder containing GGUF model files",
             "refresh_models_btn": "Rescan models folder for new GGUF files",
             "model_entry": "Active GGUF model file path or split part 00001",
@@ -4692,8 +5660,12 @@ class LlamaLauncher(ctk.CTk):
             ToolTip(self.exe_entry, tips["exe_entry"])
         if hasattr(self, "browse_exe_btn"):
             ToolTip(self.browse_exe_btn, tips["browse_exe_btn"])
+        if hasattr(self, "update_exe_btn"):
+            ToolTip(self.update_exe_btn, tips["update_exe_btn"])
         if hasattr(self, "models_dir_entry"):
             ToolTip(self.models_dir_entry, tips["models_dir_entry"])
+        if hasattr(self, "download_model_btn"):
+            ToolTip(self.download_model_btn, tips["download_model_btn"])
         if hasattr(self, "browse_dir_btn"):
             ToolTip(self.browse_dir_btn, tips["browse_dir_btn"])
         if hasattr(self, "refresh_models_btn"):
@@ -4928,6 +5900,57 @@ class LlamaLauncher(ctk.CTk):
     def open_profile_helper(self):
         """Open the Profile Helper dialog to generate AI optimization prompts from hardware specs."""
         ProfileHelperDialog(master=self)
+
+    def open_model_downloader(self):
+        """Open the Hugging Face GGUF Model Explorer & Downloader flyout dialog."""
+        # Dynamically retrieve active models folder from models_dir_entry or self.models_dir
+        target_dir = ""
+        if hasattr(self, "models_dir_entry"):
+            target_dir = self.models_dir_entry.get().strip()
+        if not target_dir:
+            target_dir = self.models_dir or os.path.join(os.path.expanduser("~"), "models")
+
+        target_dir = os.path.normpath(target_dir)
+
+        def on_complete(downloaded_filepath):
+            # 1. Ensure models_dir matches target_dir
+            if hasattr(self, "models_dir_entry"):
+                self.models_dir_entry.delete(0, "end")
+                self.models_dir_entry.insert(0, target_dir)
+            self.models_dir = target_dir
+            self._persist_app_config()
+
+            # 2. Rescan models folder
+            self.refresh_models_folder()
+
+            # 3. Auto-select downloaded model
+            if downloaded_filepath and os.path.isfile(downloaded_filepath):
+                norm_m = os.path.normpath(downloaded_filepath)
+                self.model_entry.delete(0, "end")
+                self.model_entry.insert(0, norm_m)
+                self._add_recent_model(norm_m)
+                self._auto_detect_vision_mmproj(norm_m)
+                self._update_memory_estimation()
+                self._flash_badge(f"✓ MODEL READY: {os.path.basename(norm_m)[:24]}")
+
+        ModelDownloaderDialog(self, target_models_dir=target_dir, on_download_complete=on_complete)
+
+    def open_llama_updater(self):
+        """Open the llama.cpp Binary Release Updater dialog."""
+        cur_exe = self.exe_entry.get().strip() if hasattr(self, "exe_entry") else self.llama_exe
+
+        def on_complete(new_exe_path):
+            if new_exe_path and os.path.isfile(new_exe_path):
+                norm_exe = os.path.normpath(new_exe_path)
+                self.llama_exe = norm_exe
+                if hasattr(self, "exe_entry"):
+                    self.exe_entry.delete(0, "end")
+                    self.exe_entry.insert(0, norm_exe)
+                self._persist_app_config()
+                self._refresh_devices()
+                self._flash_badge(f"✓ UPDATED: {os.path.basename(norm_exe)}")
+
+        LlamaUpdaterDialog(self, current_exe_path=cur_exe, on_update_complete=on_complete)
 
     def browse_exe(self):
         f = filedialog.askopenfilename(
