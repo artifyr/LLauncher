@@ -2297,7 +2297,53 @@ class SettingsDialog(ctk.CTkToplevel):
         )
         self.tray_close_chk.pack(anchor="w")
 
-        # --- Section 3: Hardware & Build Specifications ---
+        # --- Section 3: Standalone Script & Configuration Export ---
+        ctk.CTkLabel(
+            scroll,
+            text="STANDALONE SCRIPT EXPORT",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_muted"],
+        ).pack(anchor="w", pady=(4, 6))
+
+        export_card = ctk.CTkFrame(
+            scroll,
+            fg_color=THEME["card_bg"],
+            border_width=1,
+            border_color=THEME["card_border"],
+            corner_radius=8,
+        )
+        export_card.pack(fill="x", pady=(0, 14))
+
+        exp_inner = ctk.CTkFrame(export_card, fg_color="transparent")
+        exp_inner.pack(fill="x", padx=14, pady=12)
+
+        exp_desc = ctk.CTkLabel(
+            exp_inner,
+            text="Export current settings, active model flags, and parameters to a standalone PowerShell (.ps1) or Batch (.bat) launch script.",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_secondary"],
+            wraplength=420,
+            justify="left",
+        )
+        exp_desc.pack(side="left", fill="x", expand=True)
+
+        self.export_ps1_btn = ctk.CTkButton(
+            exp_inner,
+            text="💾  Export .ps1",
+            width=120,
+            height=32,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=6,
+            command=self._on_export_ps1_clicked,
+        )
+        self.export_ps1_btn.pack(side="right", padx=(10, 0))
+
+        # --- Section 4: Hardware & Build Specifications ---
         ctk.CTkLabel(
             scroll,
             text="SYSTEM / PC / LAPTOP HARDWARE SPECIFICATIONS",
@@ -2426,6 +2472,10 @@ class SettingsDialog(ctk.CTkToplevel):
     def _on_behavior_toggled(self):
         if hasattr(self.master_app, "_persist_app_config"):
             self.master_app._persist_app_config()
+
+    def _on_export_ps1_clicked(self):
+        if hasattr(self.master_app, "export_script"):
+            self.master_app.export_script()
 
     def _save_settings(self):
         # 1. Models directory
@@ -3419,13 +3469,57 @@ class LlamaUpdaterDialog(ctk.CTkToplevel):
         threading.Thread(target=worker, daemon=True).start()
 
 
+class ModelDropdownAdapter:
+    """
+    Adapter enabling the categorized model dropdown to act as a seamless drop-in
+    replacement for the legacy model_entry widget across the entire codebase.
+    """
+    def __init__(self, dropdown, master):
+        self._dropdown = dropdown
+        self._master = master
+
+    def get(self):
+        val = getattr(self._master, "_selected_model_path", "")
+        if val and os.path.exists(val):
+            return val
+        cur = self._dropdown.get()
+        mapping = getattr(self._master, "_model_dropdown_map", {})
+        if cur in mapping and os.path.exists(mapping[cur]):
+            return mapping[cur]
+        if cur and os.path.exists(cur):
+            return cur
+        models_dir = getattr(self._master, "models_dir", "")
+        if models_dir and cur:
+            cand = os.path.join(models_dir, cur)
+            if os.path.exists(cand):
+                return cand
+        return val or cur
+
+    def delete(self, first=0, last=None):
+        self._master._selected_model_path = ""
+        self._dropdown.set("Select GGUF Model...")
+
+    def insert(self, index, string):
+        if string and isinstance(string, str) and string.strip():
+            self._master._set_active_model(string)
+
+    def bind(self, sequence=None, func=None, add=None):
+        pass
+
+    def configure(self, **kwargs):
+        self._dropdown.configure(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._dropdown, name)
+
+
 class LlamaLauncher(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.withdraw()  # Off-screen construction eliminates launch stutter and flicker
         self.title("LLauncher - llama.cpp Server Launcher")
-        self.geometry("1184x640")
-        self.minsize(1120, 580)
+        self.geometry("1280x880")
+        self.minsize(980, 560)
         self.resizable(True, True)
         self.configure(fg_color="black")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -3472,7 +3566,7 @@ class LlamaLauncher(ctk.CTk):
         # Process management & desktop ergonomics state
         self.log_queue = queue.Queue()
         self.log_buffer = collections.deque(maxlen=2000)
-        self.log_drawer_expanded = False
+        self.log_drawer_expanded = True
         self.auto_restart_var = ctk.BooleanVar(value=False)
         self.external_console_var = ctk.BooleanVar(value=False)
         self.minimize_to_tray_var = ctk.BooleanVar(value=True)
@@ -3487,8 +3581,12 @@ class LlamaLauncher(ctk.CTk):
         self.models_dir = ""
         self.hardware_specs = {}
         self.scanned_models_map = {}
+        self._selected_model_path = ""
+        self._model_dropdown_map = {}
         self._scan_thread = None
         self._load_app_config()
+        if self.recent_models and os.path.isfile(self.recent_models[0]):
+            self._selected_model_path = self.recent_models[0]
 
         # Live Inference Telemetry State (Phase 2)
         self._metrics_stop_event = threading.Event()
@@ -4166,16 +4264,12 @@ class LlamaLauncher(ctk.CTk):
         return result_map
 
     def _trigger_models_scan(self, on_complete=None):
-        """Asynchronously scan the configured models_dir and populate model_library_menu."""
+        """Asynchronously scan the configured models_dir and populate the model dropdown."""
         models_folder = self.models_dir.strip() if hasattr(self, "models_dir") else ""
-        if hasattr(self, "models_dir_entry"):
-            models_folder = self.models_dir_entry.get().strip()
 
         if not models_folder or not os.path.isdir(models_folder):
             self.scanned_models_map = {}
-            if hasattr(self, "model_library_menu"):
-                self.model_library_menu.configure(values=["No Models Found (Set Folder)"])
-                self.model_library_menu.set("No Models Found (Set Folder)")
+            self._refresh_model_dropdown_values()
             if on_complete:
                 on_complete(0)
             return
@@ -4185,14 +4279,7 @@ class LlamaLauncher(ctk.CTk):
 
             def apply_results():
                 self.scanned_models_map = res
-                if hasattr(self, "model_library_menu"):
-                    if res:
-                        options = ["Select Model from Folder..."] + list(res.keys())
-                        self.model_library_menu.configure(values=options)
-                        self.model_library_menu.set("Select Model from Folder...")
-                    else:
-                        self.model_library_menu.configure(values=["No Models in Folder"])
-                        self.model_library_menu.set("No Models in Folder")
+                self._refresh_model_dropdown_values()
                 if on_complete:
                     on_complete(len(res))
 
@@ -4201,7 +4288,7 @@ class LlamaLauncher(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _add_recent_model(self, model_path: str):
-        """Add model path to recent history and refresh UI dropdown."""
+        """Add model path to recent history and refresh model dropdown."""
         if not model_path or not model_path.strip():
             return
         norm_path = os.path.normpath(model_path.strip())
@@ -4210,44 +4297,114 @@ class LlamaLauncher(ctk.CTk):
         self.recent_models.insert(0, norm_path)
         self.recent_models = self.recent_models[:15]
         self._persist_recent_models()
-        self._refresh_recent_models_menu()
+        self._refresh_model_dropdown_values()
 
-    def _refresh_recent_models_menu(self):
-        """Update recent models dropdown menu values."""
-        if not hasattr(self, "recent_models_menu"):
-            return
-        options = ["Recent Models..."]
-        for p in self.recent_models:
-            options.append(os.path.basename(p))
-        if len(self.recent_models) > 0:
-            options.append("Clear History")
-        self.recent_models_menu.configure(values=options)
-        self.recent_models_menu.set("Recent Models...")
-
-    def _on_recent_model_selected(self, choice: str):
-        """Handle selection from recent models dropdown."""
-        if choice == "Recent Models...":
-            return
-        if choice == "Clear History":
-            self.recent_models = []
-            self._persist_recent_models()
-            self._refresh_recent_models_menu()
-            self._flash_badge("● HISTORY CLEARED")
+    def _refresh_model_dropdown_values(self):
+        """
+        Rebuild and populate the model dropdown menu with up to 3 recent models
+        under '--------- Recent models ---------' and scanned models from the models
+        folder under '--------- Other models ---------'.
+        """
+        if not hasattr(self, "model_dropdown"):
             return
 
-        # Find matching path by filename
-        matched_path = None
-        for p in self.recent_models:
-            if os.path.basename(p) == choice:
-                matched_path = p
+        values = []
+        self._model_dropdown_map = {}
+
+        # 1. Top 3 Recent Models
+        recent_candidates = []
+        for p in getattr(self, "recent_models", []):
+            if p and isinstance(p, str) and p.strip():
+                norm = os.path.normpath(p.strip())
+                if norm not in recent_candidates and os.path.isfile(norm):
+                    recent_candidates.append(norm)
+            if len(recent_candidates) >= 3:
                 break
 
-        if matched_path:
-            self.model_entry.delete(0, "end")
-            self.model_entry.insert(0, matched_path)
-            self._add_recent_model(matched_path)
-            self._auto_detect_vision_mmproj(matched_path)
-            self._update_memory_estimation()
+        # Fallback to any recent models if files moved
+        if not recent_candidates:
+            for p in getattr(self, "recent_models", []):
+                if p and isinstance(p, str) and p.strip():
+                    norm = os.path.normpath(p.strip())
+                    if norm not in recent_candidates:
+                        recent_candidates.append(norm)
+                if len(recent_candidates) >= 3:
+                    break
+
+        values.append("--------- Recent models ---------")
+        if recent_candidates:
+            for p in recent_candidates:
+                disp = os.path.basename(p)
+                if disp in self._model_dropdown_map:
+                    disp = f"{disp} ({os.path.basename(os.path.dirname(p))})"
+                values.append(disp)
+                self._model_dropdown_map[disp] = p
+        else:
+            values.append("  (No recent models)")
+
+        # 2. Other Models from configured models_dir
+        values.append("--------- Other models ---------")
+        recent_set = set(recent_candidates)
+        other_count = 0
+
+        # Scan models in models_dir if available
+        models_folder = getattr(self, "models_dir", "").strip()
+        scanned = getattr(self, "scanned_models_map", {})
+        if not scanned and models_folder and os.path.isdir(models_folder):
+            scanned = self.scan_models_in_dir(models_folder)
+            self.scanned_models_map = scanned
+
+        for name, p in sorted(scanned.items(), key=lambda x: x[0].lower()):
+            norm_p = os.path.normpath(p)
+            if norm_p not in recent_set:
+                disp = name
+                if disp in self._model_dropdown_map:
+                    disp = f"{name} ({os.path.basename(os.path.dirname(p))})"
+                values.append(disp)
+                self._model_dropdown_map[disp] = norm_p
+                other_count += 1
+
+        if other_count == 0:
+            values.append("  (No other models in folder)")
+
+        self.model_dropdown.configure(values=values)
+
+        # Ensure current display text reflects active model
+        if getattr(self, "_selected_model_path", ""):
+            cur_disp = os.path.basename(self._selected_model_path)
+            self.model_dropdown.set(cur_disp)
+        elif recent_candidates:
+            self._selected_model_path = recent_candidates[0]
+            self.model_dropdown.set(os.path.basename(recent_candidates[0]))
+        else:
+            self.model_dropdown.set("Select GGUF Model...")
+
+    def _on_model_dropdown_selected(self, choice: str):
+        """Handle selection from the categorized model dropdown."""
+        if choice.startswith("---") or choice.strip().startswith("(") or "No " in choice:
+            # Revert display back to currently selected model
+            if getattr(self, "_selected_model_path", ""):
+                self.model_dropdown.set(os.path.basename(self._selected_model_path))
+            else:
+                self.model_dropdown.set("Select GGUF Model...")
+            return
+
+        target_path = self._model_dropdown_map.get(choice)
+        if target_path and os.path.exists(target_path):
+            self._set_active_model(target_path)
+            self._flash_badge(f"● SELECTED: {os.path.basename(target_path)[:24]}")
+
+    def _set_active_model(self, full_path: str):
+        """Set the active GGUF model path, update UI, recent history, and recalculate memory."""
+        if not full_path or not full_path.strip():
+            return
+        norm_path = os.path.normpath(full_path.strip())
+        self._selected_model_path = norm_path
+        if hasattr(self, "model_dropdown"):
+            self.model_dropdown.set(os.path.basename(norm_path))
+        self._add_recent_model(norm_path)
+        self._auto_detect_vision_mmproj(norm_path)
+        self._update_memory_estimation()
 
     def _auto_detect_vision_mmproj(self, model_path: str):
         """Auto-detect matching vision mmproj in model directory if model is vision-capable."""
@@ -4625,86 +4782,9 @@ class LlamaLauncher(ctk.CTk):
         )
         self.update_exe_btn.pack(side="left")
 
-        # Row 1: Models Folder (Configurable Directory)
-        ctk.CTkLabel(
-            card,
-            text="Models Folder",
-            font=self.font_label,
-            text_color=THEME["text_secondary"],
-            width=115,
-            anchor="w",
-        ).grid(row=1, column=0, sticky="w", padx=(12, 4), pady=(0, 5))
-
-        self.models_dir_entry = ctk.CTkEntry(
-            card,
-            placeholder_text=r"Folder containing .gguf models (e.g. D:\Models)",
-            placeholder_text_color=THEME["text_muted"],
-            fg_color=THEME["input_bg"],
-            border_color=THEME["input_border"],
-            border_width=1,
-            text_color=THEME["text_primary"],
-            corner_radius=6,
-            height=30,
-            font=self.font_sm,
-        )
-        if self.models_dir:
-            self.models_dir_entry.insert(0, self.models_dir)
-        self.models_dir_entry.grid(row=1, column=1, sticky="ew", padx=(4, 8), pady=(0, 5))
-
-        folder_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-        folder_btn_frame.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 5))
-
-        self.download_model_btn = ctk.CTkButton(
-            folder_btn_frame,
-            text="⬇ HF Models",
-            width=78,
-            height=30,
-            fg_color=THEME["secondary_btn_bg"],
-            hover_color=THEME["secondary_btn_hover"],
-            border_width=1,
-            border_color=THEME["secondary_btn_border"],
-            text_color=THEME["secondary_btn_text"],
-            corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            command=self.open_model_downloader,
-        )
-        self.download_model_btn.pack(side="left", padx=(0, 4))
-
-        self.browse_dir_btn = ctk.CTkButton(
-            folder_btn_frame,
-            text="Browse",
-            width=50,
-            height=30,
-            fg_color=THEME["secondary_btn_bg"],
-            hover_color=THEME["secondary_btn_hover"],
-            border_width=1,
-            border_color=THEME["secondary_btn_border"],
-            text_color=THEME["secondary_btn_text"],
-            corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            command=self.choose_models_folder,
-        )
-        self.browse_dir_btn.pack(side="left", padx=(0, 4))
-
-        self.refresh_models_btn = ctk.CTkButton(
-            folder_btn_frame,
-            text="🔄",
-            width=31,
-            height=30,
-            fg_color=THEME["secondary_btn_bg"],
-            hover_color=THEME["secondary_btn_hover"],
-            border_width=1,
-            border_color=THEME["secondary_btn_border"],
-            text_color=THEME["secondary_btn_text"],
-            corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            command=self.refresh_models_folder,
-        )
-        self.refresh_models_btn.pack(side="left")
-
-        # Row 2: Model GGUF + Vision Checkbox
+        # Row 1: Model GGUF + Vision Checkbox
         model_lbl_frame = ctk.CTkFrame(card, fg_color="transparent")
-        model_lbl_frame.grid(row=2, column=0, sticky="w", padx=(12, 4), pady=(0, 6))
+        model_lbl_frame.grid(row=1, column=0, sticky="w", padx=(12, 4), pady=(0, 6))
 
         ctk.CTkLabel(
             model_lbl_frame,
@@ -4734,74 +4814,36 @@ class LlamaLauncher(ctk.CTk):
         )
         self.vision_chk.pack(side="left", padx=(10, 0))
 
-        # Model input container: Entry + Library Dropdown + Recent Models Dropdown
-        model_input_frame = ctk.CTkFrame(card, fg_color="transparent")
-        model_input_frame.grid(row=2, column=1, sticky="ew", padx=(4, 8), pady=(0, 6))
-        model_input_frame.columnconfigure(0, weight=1)
-
-        self.model_entry = ctk.CTkEntry(
-            model_input_frame,
-            placeholder_text="Path to .gguf weights file",
-            placeholder_text_color=THEME["text_muted"],
-            fg_color=THEME["input_bg"],
-            border_color=THEME["input_border"],
-            border_width=1,
-            text_color=THEME["text_primary"],
-            corner_radius=6,
-            height=30,
-            font=self.font_sm,
-        )
-        self.model_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        self.model_entry.bind("<KeyRelease>", lambda _: self._update_memory_estimation())
-        self.model_entry.bind("<FocusOut>", lambda _: self._update_memory_estimation())
-
-        self.model_library_menu = ctk.CTkOptionMenu(
-            model_input_frame,
-            values=["Scanning Folder..."],
-            command=self._on_library_model_selected,
-            fg_color=THEME["input_bg"],
-            button_color="#27272a",
-            button_hover_color="#3f3f46",
-            text_color=THEME["text_secondary"],
-            dropdown_fg_color=THEME["dropdown_bg"],
-            dropdown_text_color=THEME["text_primary"],
-            dropdown_hover_color="#27272a",
-            corner_radius=6,
-            height=30,
-            width=150,
-            font=self.font_sm,
-        )
-        self.model_library_menu.set("Model Library...")
-        self.model_library_menu.grid(row=0, column=1, sticky="e", padx=(0, 4))
-
-        initial_history_values = ["Recent Models..."]
-        for p in self.recent_models:
-            initial_history_values.append(os.path.basename(p))
-        if len(self.recent_models) > 0:
-            initial_history_values.append("Clear History")
-
-        self.recent_models_menu = ctk.CTkOptionMenu(
-            model_input_frame,
-            values=initial_history_values,
-            command=self._on_recent_model_selected,
-            fg_color=THEME["input_bg"],
-            button_color="#27272a",
-            button_hover_color="#3f3f46",
-            text_color=THEME["text_secondary"],
-            dropdown_fg_color=THEME["dropdown_bg"],
-            dropdown_text_color=THEME["text_primary"],
-            dropdown_hover_color="#27272a",
-            corner_radius=6,
-            height=30,
-            width=125,
-            font=self.font_sm,
-        )
-        self.recent_models_menu.set("Recent Models...")
-        self.recent_models_menu.grid(row=0, column=2, sticky="e")
-
-        self.browse_btn = ctk.CTkButton(
+        # Model Dropdown spanning column 1
+        self.model_dropdown = ctk.CTkOptionMenu(
             card,
-            text="Browse",
+            values=["Scanning models..."],
+            command=self._on_model_dropdown_selected,
+            fg_color=THEME["input_bg"],
+            button_color="#27272a",
+            button_hover_color="#3f3f46",
+            text_color=THEME["text_primary"],
+            dropdown_fg_color=THEME["dropdown_bg"],
+            dropdown_text_color=THEME["text_primary"],
+            dropdown_hover_color="#27272a",
+            corner_radius=6,
+            height=30,
+            font=self.font_sm,
+            anchor="w",
+        )
+        self.model_dropdown.grid(row=1, column=1, sticky="ew", padx=(4, 8), pady=(0, 6))
+        self.model_dropdown.set("Select GGUF Model...")
+
+        # Adapter for backward-compatibility with all existing methods calling self.model_entry
+        self.model_entry = ModelDropdownAdapter(self.model_dropdown, self)
+
+        # Right-side buttons: HF Models + Browse
+        model_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        model_btn_frame.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=(0, 6))
+
+        self.download_model_btn = ctk.CTkButton(
+            model_btn_frame,
+            text="⬇ HF Models",
             width=85,
             height=30,
             fg_color=THEME["secondary_btn_bg"],
@@ -4810,12 +4852,28 @@ class LlamaLauncher(ctk.CTk):
             border_color=THEME["secondary_btn_border"],
             text_color=THEME["secondary_btn_text"],
             corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self.open_model_downloader,
+        )
+        self.download_model_btn.pack(side="left", padx=(0, 4))
+
+        self.browse_btn = ctk.CTkButton(
+            model_btn_frame,
+            text="Browse",
+            width=60,
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             command=self.browse_model,
         )
-        self.browse_btn.grid(row=2, column=2, sticky="e", padx=(0, 12), pady=(0, 6))
+        self.browse_btn.pack(side="left")
 
-        # Row 3: Vision mmproj (Conditionally displayed when Vision checkbox is checked)
+        # Row 2: Vision mmproj (Conditionally displayed when Vision checkbox is checked)
         self.mmproj_label = ctk.CTkLabel(
             card,
             text="Vision mmproj",
@@ -4842,7 +4900,7 @@ class LlamaLauncher(ctk.CTk):
         self.mmproj_browse_btn = ctk.CTkButton(
             card,
             text="Browse",
-            width=85,
+            width=60,
             height=30,
             fg_color=THEME["secondary_btn_bg"],
             hover_color=THEME["secondary_btn_hover"],
@@ -4850,7 +4908,7 @@ class LlamaLauncher(ctk.CTk):
             border_color=THEME["secondary_btn_border"],
             text_color=THEME["secondary_btn_text"],
             corner_radius=6,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             command=self.browse_mmproj,
         )
 
@@ -4858,9 +4916,9 @@ class LlamaLauncher(ctk.CTk):
         """Show or hide mmproj row below GGUF selector based on Vision checkbox."""
         if hasattr(self, "mmproj_label") and hasattr(self, "vision_var"):
             if self.vision_var.get():
-                self.mmproj_label.grid(row=3, column=0, sticky="w", padx=(12, 4), pady=(0, 8))
-                self.mmproj_entry.grid(row=3, column=1, sticky="ew", padx=(4, 8), pady=(0, 8))
-                self.mmproj_browse_btn.grid(row=3, column=2, sticky="e", padx=(0, 12), pady=(0, 8))
+                self.mmproj_label.grid(row=2, column=0, sticky="w", padx=(12, 4), pady=(0, 8))
+                self.mmproj_entry.grid(row=2, column=1, sticky="ew", padx=(4, 8), pady=(0, 8))
+                self.mmproj_browse_btn.grid(row=2, column=2, sticky="e", padx=(0, 12), pady=(0, 8))
             else:
                 self.mmproj_label.grid_remove()
                 self.mmproj_entry.grid_remove()
@@ -5655,13 +5713,11 @@ class LlamaLauncher(ctk.CTk):
         action_row = ctk.CTkFrame(self.main_container, fg_color="transparent")
         action_row.pack(fill="x", padx=2, pady=(2, 0))
         action_row.columnconfigure(0, weight=3)
-        action_row.columnconfigure(0, weight=3)
         action_row.columnconfigure(1, weight=1)
         action_row.columnconfigure(2, weight=1)
         action_row.columnconfigure(3, weight=1)
         action_row.columnconfigure(4, weight=1)
         action_row.columnconfigure(5, weight=1)
-        action_row.columnconfigure(6, weight=1)
 
         self.start_btn = ctk.CTkButton(
             action_row,
@@ -5724,21 +5780,6 @@ class LlamaLauncher(ctk.CTk):
         )
         self.api_tester_btn.grid(row=0, column=3, sticky="ew", padx=(0, 6))
 
-        self.export_script_btn = ctk.CTkButton(
-            action_row,
-            text="💾  Export .ps1",
-            height=42,
-            fg_color=THEME["secondary_btn_bg"],
-            hover_color=THEME["secondary_btn_hover"],
-            border_width=1,
-            border_color=THEME["secondary_btn_border"],
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            text_color=THEME["secondary_btn_text"],
-            corner_radius=8,
-            command=self.export_script,
-        )
-        self.export_script_btn.grid(row=0, column=4, sticky="ew", padx=(0, 6))
-
         self.import_script_btn = ctk.CTkButton(
             action_row,
             text="📥  Import .ps1",
@@ -5752,7 +5793,7 @@ class LlamaLauncher(ctk.CTk):
             corner_radius=8,
             command=self.import_settings,
         )
-        self.import_script_btn.grid(row=0, column=5, sticky="ew", padx=(0, 6))
+        self.import_script_btn.grid(row=0, column=4, sticky="ew", padx=(0, 6))
 
         self.profile_helper_btn = ctk.CTkButton(
             action_row,
@@ -5767,7 +5808,7 @@ class LlamaLauncher(ctk.CTk):
             corner_radius=8,
             command=self.open_profile_helper,
         )
-        self.profile_helper_btn.grid(row=0, column=6, sticky="ew")
+        self.profile_helper_btn.grid(row=0, column=5, sticky="ew")
 
     def _build_log_drawer(self):
         """Build bottom collapsible log drawer and desktop ergonomics toolbar."""
@@ -5778,10 +5819,10 @@ class LlamaLauncher(ctk.CTk):
         self.drawer_bar = ctk.CTkFrame(self.drawer_container, fg_color="transparent")
         self.drawer_bar.pack(fill="x")
 
-        # Toggle Button on the left
+        # Toggle Button on the left (starts expanded)
         self.drawer_toggle_btn = ctk.CTkButton(
             self.drawer_bar,
-            text="📝  Log Console (▲ Expand)",
+            text="📝  Log Console (▼ Collapse)",
             height=28,
             width=180,
             fg_color="#18181b",
@@ -5793,7 +5834,7 @@ class LlamaLauncher(ctk.CTk):
             corner_radius=6,
             command=self.toggle_log_drawer,
         )
-        self.drawer_toggle_btn.pack(side="left", padx=(0, 10))
+        self.drawer_toggle_btn.pack(side="left", padx=(0, 8))
 
         self.settings_btn = ctk.CTkButton(
             self.drawer_bar,
@@ -5809,56 +5850,41 @@ class LlamaLauncher(ctk.CTk):
             corner_radius=6,
             command=self.open_settings_dialog,
         )
-        self.settings_btn.pack(side="left", padx=(0, 10))
+        self.settings_btn.pack(side="left", padx=(0, 8))
 
-        # Watchdog & window mode checkboxes
-        self.auto_restart_chk = ctk.CTkCheckBox(
+        # Public Tunnel quick button on the right
+        self.tunnel_btn = ctk.CTkButton(
             self.drawer_bar,
-            text="🔄 Auto-Restart on Crash",
-            variable=self.auto_restart_var,
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=THEME["text_primary"],
-            fg_color=THEME["checkbox_active"],
-            hover_color=THEME["checkbox_hover"],
-            border_color=THEME["checkbox_border"],
-            border_width=2,
-            corner_radius=4,
-            height=24,
-            command=self._persist_app_config,
+            text="🌐  Public Tunnel",
+            height=28,
+            width=130,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            border_width=1,
+            border_color="#3f3f46",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#e4e4e7",
+            corner_radius=6,
+            command=self.open_tunnel_dialog,
         )
-        self.auto_restart_chk.pack(side="left", padx=(0, 12))
+        self.tunnel_btn.pack(side="right", padx=(6, 0))
 
-        self.external_console_chk = ctk.CTkCheckBox(
+        # Tray quick button on the right
+        self.tray_btn = ctk.CTkButton(
             self.drawer_bar,
-            text="🪟 External CMD Window",
-            variable=self.external_console_var,
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=THEME["text_primary"],
-            fg_color=THEME["checkbox_active"],
-            hover_color=THEME["checkbox_hover"],
-            border_color=THEME["checkbox_border"],
-            border_width=2,
-            corner_radius=4,
-            height=24,
-            command=self._persist_app_config,
+            text="📌  Minimize to Tray",
+            height=28,
+            width=130,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            border_width=1,
+            border_color="#3f3f46",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#a1a1aa",
+            corner_radius=6,
+            command=self.hide_to_tray,
         )
-        self.external_console_chk.pack(side="left", padx=(0, 12))
-
-        self.tray_close_chk = ctk.CTkCheckBox(
-            self.drawer_bar,
-            text="📥 Minimize to Tray on Close",
-            variable=self.minimize_to_tray_var,
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=THEME["text_primary"],
-            fg_color=THEME["checkbox_active"],
-            hover_color=THEME["checkbox_hover"],
-            border_color=THEME["checkbox_border"],
-            border_width=2,
-            corner_radius=4,
-            height=24,
-            command=self._persist_app_config,
-        )
-        self.tray_close_chk.pack(side="left", padx=(0, 10))
+        self.tray_btn.pack(side="right")
 
         # Live Inference Telemetry Strip (Phase 2)
         self.telemetry_strip = ctk.CTkFrame(
@@ -5874,47 +5900,13 @@ class LlamaLauncher(ctk.CTk):
         self.telemetry_label = ctk.CTkLabel(
             self.telemetry_strip,
             text="⚪ SERVER OFFLINE  |  Prompt: -- t/s  |  Gen: -- t/s  |  Tokens: --  |  Slots: Idle (0%)",
-            font=ctk.CTkFont(family="Consolas", size=12, weight="bold"),
+            font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
             text_color="#ffffff",
             anchor="center",
         )
         self.telemetry_label.pack(fill="both", expand=True, padx=8, pady=3)
 
-        # Public Tunnel quick button on the right
-        self.tunnel_btn = ctk.CTkButton(
-            self.drawer_bar,
-            text="🌐  Public Tunnel",
-            height=28,
-            width=135,
-            fg_color="#18181b",
-            hover_color="#27272a",
-            border_width=1,
-            border_color="#3f3f46",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#e4e4e7",
-            corner_radius=6,
-            command=self.open_tunnel_dialog,
-        )
-        self.tunnel_btn.pack(side="right", padx=(0, 8))
-
-        # Tray quick button on the right
-        self.tray_btn = ctk.CTkButton(
-            self.drawer_bar,
-            text="📌  Minimize to Tray",
-            height=28,
-            width=135,
-            fg_color="#18181b",
-            hover_color="#27272a",
-            border_width=1,
-            border_color="#3f3f46",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#a1a1aa",
-            corner_radius=6,
-            command=self.hide_to_tray,
-        )
-        self.tray_btn.pack(side="right")
-
-        # Collapsible Drawer Body (hidden by default)
+        # Collapsible Drawer Body (expanded by default)
         self.drawer_body = ctk.CTkFrame(
             self.drawer_container,
             fg_color=THEME["card_bg"],
@@ -6013,6 +6005,9 @@ class LlamaLauncher(ctk.CTk):
         self.log_textbox.insert("1.0", "[SYSTEM] Log console initialized. Ready to stream llama-server engine output.\n")
         self.log_textbox.configure(state="disabled")
 
+        # Drawer starts expanded by default
+        self.drawer_body.pack(fill="both", expand=True, pady=(6, 0))
+
     def _apply_tooltips(self):
         """Attach concise, informative tooltips to all interactive elements across the launcher."""
         tips = {
@@ -6108,20 +6103,12 @@ class LlamaLauncher(ctk.CTk):
             ToolTip(self.browse_exe_btn, tips["browse_exe_btn"])
         if hasattr(self, "update_exe_btn"):
             ToolTip(self.update_exe_btn, tips["update_exe_btn"])
-        if hasattr(self, "models_dir_entry"):
-            ToolTip(self.models_dir_entry, tips["models_dir_entry"])
+        if hasattr(self, "model_dropdown"):
+            ToolTip(self.model_dropdown, "Select active GGUF model from recent history or models folder")
+        elif hasattr(self, "model_entry"):
+            ToolTip(self.model_entry, tips["model_entry"])
         if hasattr(self, "download_model_btn"):
             ToolTip(self.download_model_btn, tips["download_model_btn"])
-        if hasattr(self, "browse_dir_btn"):
-            ToolTip(self.browse_dir_btn, tips["browse_dir_btn"])
-        if hasattr(self, "refresh_models_btn"):
-            ToolTip(self.refresh_models_btn, tips["refresh_models_btn"])
-        if hasattr(self, "model_entry"):
-            ToolTip(self.model_entry, tips["model_entry"])
-        if hasattr(self, "model_library_menu"):
-            ToolTip(self.model_library_menu, tips["model_library_menu"])
-        if hasattr(self, "recent_models_menu"):
-            ToolTip(self.recent_models_menu, tips["recent_models_menu"])
         if hasattr(self, "browse_btn"):
             ToolTip(self.browse_btn, tips["browse_btn"])
         if hasattr(self, "vision_chk"):
@@ -6193,8 +6180,6 @@ class LlamaLauncher(ctk.CTk):
             ToolTip(self.client_configs_btn, tips["client_configs_btn"])
         if hasattr(self, "api_tester_btn"):
             ToolTip(self.api_tester_btn, tips["api_tester_btn"])
-        if hasattr(self, "export_script_btn"):
-            ToolTip(self.export_script_btn, tips["export_script_btn"])
         if hasattr(self, "import_script_btn"):
             ToolTip(self.import_script_btn, tips["import_script_btn"])
         if hasattr(self, "profile_helper_btn"):
@@ -6205,12 +6190,6 @@ class LlamaLauncher(ctk.CTk):
             ToolTip(self.drawer_toggle_btn, tips["drawer_toggle_btn"])
         if hasattr(self, "settings_btn"):
             ToolTip(self.settings_btn, tips["settings_btn"])
-        if hasattr(self, "auto_restart_chk"):
-            ToolTip(self.auto_restart_chk, tips["auto_restart_chk"])
-        if hasattr(self, "external_console_chk"):
-            ToolTip(self.external_console_chk, tips["external_console_chk"])
-        if hasattr(self, "tray_close_chk"):
-            ToolTip(self.tray_close_chk, tips["tray_close_chk"])
         if hasattr(self, "telemetry_strip"):
             ToolTip(self.telemetry_strip, tips["telemetry_strip"])
         if hasattr(self, "tunnel_btn"):
@@ -6229,19 +6208,13 @@ class LlamaLauncher(ctk.CTk):
     def toggle_log_drawer(self):
         """Expand or collapse the in-window embedded log drawer."""
         self.log_drawer_expanded = not self.log_drawer_expanded
-        curr_w = self.winfo_width()
-        curr_h = self.winfo_height()
 
         if self.log_drawer_expanded:
             self.drawer_body.pack(fill="both", expand=True, pady=(6, 0))
             self.drawer_toggle_btn.configure(text="📝  Log Console (▼ Collapse)")
-            if curr_h < 750:
-                self.geometry(f"{max(curr_w, 1184)}x{max(curr_h + 175, 795)}")
         else:
             self.drawer_body.pack_forget()
             self.drawer_toggle_btn.configure(text="📝  Log Console (▲ Expand)")
-            if curr_h >= 750:
-                self.geometry(f"{max(curr_w, 1184)}x{max(curr_h - 175, 625)}")
 
     def open_log_console(self):
         """Bring window to foreground and ensure log drawer is open."""
@@ -6429,19 +6402,15 @@ class LlamaLauncher(ctk.CTk):
             self.refresh_models_folder()
 
     def refresh_models_folder(self):
-        """Refresh models list from the entered or selected models folder."""
+        """Refresh models list from the configured models folder and update dropdown."""
         if hasattr(self, "models_dir_entry"):
             entered_dir = self.models_dir_entry.get().strip()
             if entered_dir and os.path.isdir(entered_dir):
                 self.models_dir = os.path.normpath(entered_dir)
                 self._persist_app_config()
 
-        if hasattr(self, "refresh_models_btn"):
-            self.refresh_models_btn.configure(state="disabled")
-
         def on_done(count):
-            if hasattr(self, "refresh_models_btn"):
-                self.refresh_models_btn.configure(state="normal")
+            self._refresh_model_dropdown_values()
             if count > 0:
                 self._flash_badge(f"● LOADED {count} MODELS")
             else:
@@ -6449,38 +6418,19 @@ class LlamaLauncher(ctk.CTk):
 
         self._trigger_models_scan(on_complete=on_done)
 
-    def _on_library_model_selected(self, choice: str):
-        """Handle user selecting a model from the scanned folder library dropdown."""
-        if choice in ("Model Library...", "Select Model from Folder...", "No Models in Folder", "No Models Found (Set Folder)", "Scanning Folder..."):
-            return
-
-        if choice in self.scanned_models_map:
-            target_path = self.scanned_models_map[choice]
-            if os.path.exists(target_path):
-                self.model_entry.delete(0, "end")
-                self.model_entry.insert(0, target_path)
-                self._add_recent_model(target_path)
-                self._auto_detect_vision_mmproj(target_path)
-                self._flash_badge(f"● SELECTED: {os.path.basename(target_path)[:24]}")
-                self._update_memory_estimation()
-
     def browse_model(self):
-        f = filedialog.askopenfilename(filetypes=[("GGUF Files", "*.gguf")])
+        """Browse filesystem for any .gguf model file and make it active."""
+        initial_dir = self.models_dir if (self.models_dir and os.path.isdir(self.models_dir)) else None
+        f = filedialog.askopenfilename(initialdir=initial_dir, filetypes=[("GGUF Files", "*.gguf"), ("All Files", "*.*")])
         if f:
             norm_path = os.path.normpath(f)
-            self.model_entry.delete(0, "end")
-            self.model_entry.insert(0, norm_path)
-            self._add_recent_model(norm_path)
-            self._auto_detect_vision_mmproj(norm_path)
+            self._set_active_model(norm_path)
             # If current models_dir is empty, automatically adopt parent directory of selected model
             if not self.models_dir:
                 self.models_dir = os.path.dirname(norm_path)
-                if hasattr(self, "models_dir_entry"):
-                    self.models_dir_entry.delete(0, "end")
-                    self.models_dir_entry.insert(0, self.models_dir)
                 self._persist_app_config()
                 self._trigger_models_scan()
-            self._update_memory_estimation()
+            self._flash_badge(f"● SELECTED: {os.path.basename(norm_path)[:24]}")
 
     def _build_command_args(self):
         """Validate input paths and construct full argument list for llama-server."""
