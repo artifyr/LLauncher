@@ -946,6 +946,7 @@ class ProfileHelperDialog(ctk.CTkToplevel):
         ]
 
         self.spec_entries = {}
+        hw_defaults = getattr(self.master, "hardware_specs", {}) if self.master else {}
 
         for row_idx, (key, label_text, placeholder) in enumerate(fields):
             lbl = ctk.CTkLabel(
@@ -970,6 +971,9 @@ class ProfileHelperDialog(ctk.CTkToplevel):
                 height=28,
                 font=ctk.CTkFont(family="Segoe UI", size=11),
             )
+            val = hw_defaults.get(key, "")
+            if val:
+                ent.insert(0, str(val))
             ent.grid(row=row_idx, column=1, padx=(0, 14), pady=5, sticky="ew")
             self.spec_entries[key] = ent
 
@@ -2096,6 +2100,368 @@ class TunnelDialog(ctk.CTkToplevel):
             self.tunnel_manager.log_lines.clear()
 
 
+class SettingsDialog(ctk.CTkToplevel):
+    """
+    Settings flyout dialog matching Windows 11 Mica dark aesthetic.
+    Allows configuring models directory, auto-restart on crash, external console,
+    minimize-to-tray on close, and system hardware specifications (VRAM, GPUs, CPU, RAM)
+    referenced by AI Profile Helper, Auto-Fit, and Model Downloader.
+    """
+
+    def __init__(self, master_app):
+        super().__init__(master_app)
+        self.master_app = master_app
+        self.title("Settings - LLauncher")
+        self.geometry("640x720")
+        self.minsize(580, 620)
+        self.transient(master_app)
+        self.configure(fg_color=THEME["bg"])
+
+        ico_file = resource_path(os.path.join("assets", "llauncher.ico"))
+        if not os.path.exists(ico_file):
+            ico_file = resource_path("llauncher.ico")
+        if os.path.exists(ico_file):
+            try:
+                self.iconbitmap(ico_file)
+            except Exception:
+                pass
+
+        apply_mica_style(self)
+
+        try:
+            self.update_idletasks()
+            m_x = master_app.winfo_x()
+            m_y = master_app.winfo_y()
+            m_w = master_app.winfo_width()
+            m_h = master_app.winfo_height()
+            d_w, d_h = 640, 720
+            pos_x = max(0, m_x + (m_w - d_w) // 2)
+            pos_y = max(0, m_y + (m_h - d_h) // 2)
+            self.geometry(f"{d_w}x{d_h}+{pos_x}+{pos_y}")
+        except Exception:
+            pass
+
+        self._build_ui()
+
+    def _build_ui(self):
+        main = ctk.CTkFrame(self, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=20, pady=16)
+
+        # Header Title
+        hdr = ctk.CTkFrame(main, fg_color="transparent")
+        hdr.pack(fill="x", pady=(0, 12))
+
+        ctk.CTkLabel(
+            hdr,
+            text="⚙  SETTINGS & SYSTEM PROFILE",
+            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            text_color=THEME["text_primary"],
+        ).pack(side="left")
+
+        # Scrollable container for settings sections
+        scroll = ctk.CTkScrollableFrame(
+            main,
+            fg_color="transparent",
+            corner_radius=0,
+        )
+        scroll.pack(fill="both", expand=True, pady=(0, 12))
+
+        # --- Section 1: Application & Folder Paths ---
+        ctk.CTkLabel(
+            scroll,
+            text="APPLICATION & FOLDER PATHS",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_muted"],
+        ).pack(anchor="w", pady=(4, 6))
+
+        paths_card = ctk.CTkFrame(
+            scroll,
+            fg_color=THEME["card_bg"],
+            border_width=1,
+            border_color=THEME["card_border"],
+            corner_radius=8,
+        )
+        paths_card.pack(fill="x", pady=(0, 14))
+        paths_card.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            paths_card,
+            text="Models Directory:",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_secondary"],
+        ).grid(row=0, column=0, padx=(14, 8), pady=12, sticky="w")
+
+        curr_dir = ""
+        if hasattr(self.master_app, "models_dir_entry"):
+            curr_dir = self.master_app.models_dir_entry.get().strip()
+        if not curr_dir:
+            curr_dir = getattr(self.master_app, "models_dir", "")
+
+        self.models_dir_entry = ctk.CTkEntry(
+            paths_card,
+            placeholder_text=r"Folder containing .gguf models (e.g. D:\Models)",
+            placeholder_text_color=THEME["text_muted"],
+            fg_color=THEME["input_bg"],
+            border_color=THEME["input_border"],
+            border_width=1,
+            text_color=THEME["text_primary"],
+            corner_radius=6,
+            height=30,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+        )
+        if curr_dir:
+            self.models_dir_entry.insert(0, curr_dir)
+        self.models_dir_entry.grid(row=0, column=1, padx=(0, 8), pady=12, sticky="ew")
+
+        browse_btn = ctk.CTkButton(
+            paths_card,
+            text="Browse",
+            width=65,
+            height=30,
+            fg_color=THEME["secondary_btn_bg"],
+            hover_color=THEME["secondary_btn_hover"],
+            border_width=1,
+            border_color=THEME["secondary_btn_border"],
+            text_color=THEME["secondary_btn_text"],
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self._browse_models_folder,
+        )
+        browse_btn.grid(row=0, column=2, padx=(0, 14), pady=12)
+
+        # --- Section 2: Engine Runtime & Desktop Behavior ---
+        ctk.CTkLabel(
+            scroll,
+            text="ENGINE RUNTIME & DESKTOP BEHAVIOR",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_muted"],
+        ).pack(anchor="w", pady=(4, 6))
+
+        behavior_card = ctk.CTkFrame(
+            scroll,
+            fg_color=THEME["card_bg"],
+            border_width=1,
+            border_color=THEME["card_border"],
+            corner_radius=8,
+        )
+        behavior_card.pack(fill="x", pady=(0, 14))
+
+        b_inner = ctk.CTkFrame(behavior_card, fg_color="transparent")
+        b_inner.pack(fill="x", padx=14, pady=12)
+
+        self.auto_restart_chk = ctk.CTkCheckBox(
+            b_inner,
+            text="🔄  Auto-Restart on Crash (Watchdog monitors engine and auto-restarts within 2 seconds)",
+            variable=self.master_app.auto_restart_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_primary"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
+            border_width=2,
+            corner_radius=4,
+            height=24,
+            command=self._on_behavior_toggled,
+        )
+        self.auto_restart_chk.pack(anchor="w", pady=(0, 8))
+
+        self.external_console_chk = ctk.CTkCheckBox(
+            b_inner,
+            text="🪟  External CMD Window (Launch server process in dedicated command prompt window)",
+            variable=self.master_app.external_console_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_primary"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
+            border_width=2,
+            corner_radius=4,
+            height=24,
+            command=self._on_behavior_toggled,
+        )
+        self.external_console_chk.pack(anchor="w", pady=(0, 8))
+
+        self.tray_close_chk = ctk.CTkCheckBox(
+            b_inner,
+            text="📥  Minimize to Tray on Close (Hide launcher to system notification area instead of exiting)",
+            variable=self.master_app.minimize_to_tray_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=THEME["text_primary"],
+            fg_color=THEME["checkbox_active"],
+            hover_color=THEME["checkbox_hover"],
+            border_color=THEME["checkbox_border"],
+            border_width=2,
+            corner_radius=4,
+            height=24,
+            command=self._on_behavior_toggled,
+        )
+        self.tray_close_chk.pack(anchor="w")
+
+        # --- Section 3: Hardware & Build Specifications ---
+        ctk.CTkLabel(
+            scroll,
+            text="SYSTEM / PC / LAPTOP HARDWARE SPECIFICATIONS",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=THEME["text_muted"],
+        ).pack(anchor="w", pady=(4, 6))
+
+        spec_card = ctk.CTkFrame(
+            scroll,
+            fg_color=THEME["card_bg"],
+            border_width=1,
+            border_color=THEME["card_border"],
+            corner_radius=8,
+        )
+        spec_card.pack(fill="x", pady=(0, 10))
+        spec_card.columnconfigure(1, weight=1)
+
+        spec_desc = ctk.CTkLabel(
+            spec_card,
+            text="These hardware specifications are automatically referenced by the AI Profile Helper, Auto-Fit calculations, and model recommendations.",
+            font=ctk.CTkFont(family="Segoe UI", size=10),
+            text_color=THEME["text_secondary"],
+            wraplength=570,
+            justify="left",
+        )
+        spec_desc.grid(row=0, column=0, columnspan=2, padx=14, pady=(10, 8), sticky="w")
+
+        hw_config = getattr(self.master_app, "hardware_specs", {})
+        spec_fields = [
+            ("gpu_1", "Primary GPU (GPU_1):", "e.g. RTX 4070 Ti Super 16GB, RX 7800 XT 16GB"),
+            ("vram_gb", "Primary VRAM (GB):", "e.g. 16.0 (used for Auto-Fit and headroom)"),
+            ("gpu_2", "Secondary GPU (GPU_2):", "e.g. RTX 3060 12GB (or leave blank)"),
+            ("gpu_3", "GPU_3 (optional):", "Secondary card (or leave blank)"),
+            ("gpu_4", "GPU_4 (optional):", "Secondary card (or leave blank)"),
+            ("cpu", "Processor (CPU):", "e.g. AMD Ryzen 7 7800X3D (8C/16T), Intel i7-14700K"),
+            ("ram", "System Memory (RAM):", "e.g. 32GB DDR5 6000MHz, 64GB DDR4"),
+            ("model", "Preferred Model / Target:", "e.g. Qwen 2.5 32B Q4_K_M, Mixtral 8x7B"),
+        ]
+
+        self.spec_entries = {}
+        for r_idx, (key, label_txt, placeholder) in enumerate(spec_fields, start=1):
+            ctk.CTkLabel(
+                spec_card,
+                text=label_txt,
+                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                text_color=THEME["text_primary"] if "optional" not in label_txt else THEME["text_secondary"],
+                anchor="w",
+                width=170,
+            ).grid(row=r_idx, column=0, padx=(14, 8), pady=4, sticky="w")
+
+            ent = ctk.CTkEntry(
+                spec_card,
+                placeholder_text=placeholder,
+                placeholder_text_color=THEME["text_muted"],
+                fg_color=THEME["input_bg"],
+                border_color=THEME["input_border"],
+                border_width=1,
+                text_color=THEME["text_primary"],
+                corner_radius=6,
+                height=28,
+                font=ctk.CTkFont(family="Segoe UI", size=11),
+            )
+            val = hw_config.get(key, "")
+            if val:
+                ent.insert(0, str(val))
+            ent.grid(row=r_idx, column=1, padx=(0, 14), pady=4, sticky="ew")
+            self.spec_entries[key] = ent
+
+        # Pad bottom of spec_card
+        ctk.CTkFrame(spec_card, height=6, fg_color="transparent").grid(row=len(spec_fields) + 1, column=0)
+
+        # Bottom Action Bar
+        btn_bar = ctk.CTkFrame(main, fg_color="transparent")
+        btn_bar.pack(fill="x")
+
+        self.status_feedback = ctk.CTkLabel(
+            btn_bar,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#10b981",
+        )
+        self.status_feedback.pack(side="left")
+
+        save_btn = ctk.CTkButton(
+            btn_bar,
+            text="✓  Save Settings",
+            height=32,
+            width=130,
+            fg_color=THEME["primary_btn_bg"],
+            hover_color=THEME["primary_btn_hover"],
+            border_width=1,
+            border_color=THEME["primary_btn_border"],
+            text_color=THEME["primary_btn_text"],
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=6,
+            command=self._save_settings,
+        )
+        save_btn.pack(side="right", padx=(8, 0))
+
+        cancel_btn = ctk.CTkButton(
+            btn_bar,
+            text="Close",
+            height=32,
+            width=80,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            border_width=1,
+            border_color="#3f3f46",
+            text_color="#e4e4e7",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6,
+            command=self.destroy,
+        )
+        cancel_btn.pack(side="right")
+
+    def _browse_models_folder(self):
+        init_dir = self.models_dir_entry.get().strip()
+        if not init_dir or not os.path.isdir(init_dir):
+            init_dir = getattr(self.master_app, "models_dir", None)
+        chosen = filedialog.askdirectory(initialdir=init_dir, title="Select Models Folder Containing .gguf Files")
+        if chosen:
+            clean = os.path.normpath(chosen)
+            self.models_dir_entry.delete(0, "end")
+            self.models_dir_entry.insert(0, clean)
+
+    def _on_behavior_toggled(self):
+        if hasattr(self.master_app, "_persist_app_config"):
+            self.master_app._persist_app_config()
+
+    def _save_settings(self):
+        # 1. Models directory
+        new_dir = os.path.normpath(self.models_dir_entry.get().strip()) if self.models_dir_entry.get().strip() else ""
+        if new_dir:
+            self.master_app.models_dir = new_dir
+            if hasattr(self.master_app, "models_dir_entry"):
+                self.master_app.models_dir_entry.delete(0, "end")
+                self.master_app.models_dir_entry.insert(0, new_dir)
+            self.master_app.refresh_models_folder()
+
+        # 2. Hardware specs
+        hw = {}
+        for k, ent in self.spec_entries.items():
+            hw[k] = ent.get().strip()
+        self.master_app.hardware_specs = hw
+
+        # 3. If vram_gb is set, update device_vram_map for active device
+        try:
+            v_val = float(hw.get("vram_gb", 0))
+            if v_val > 0 and hasattr(self.master_app, "device_dropdown"):
+                active_dev = self.master_app.device_dropdown.get()
+                if "none" not in active_dev.lower():
+                    self.master_app.device_vram_map[active_dev] = v_val
+                    self.master_app._update_memory_estimation()
+        except Exception:
+            pass
+
+        # 4. Persist app config
+        if hasattr(self.master_app, "_persist_app_config"):
+            self.master_app._persist_app_config()
+
+        self.status_feedback.configure(text="✓ Settings saved successfully!", text_color="#10b981")
+        self.after(1200, self.destroy)
+
+
 class ModelDownloaderDialog(ctk.CTkToplevel):
     """
     Hugging Face GGUF Model Explorer & Downloader flyout.
@@ -2220,7 +2586,27 @@ class ModelDownloaderDialog(ctk.CTkToplevel):
             corner_radius=6,
             command=self._search_huggingface,
         )
-        self.find_repos_btn.pack(side="left")
+        self.find_repos_btn.pack(side="left", padx=(0, 6))
+
+        hw = getattr(self.master_app, "hardware_specs", {})
+        if hw and (hw.get("model") or hw.get("gpu_1")):
+            quick_term = hw.get("model") or ("70b" if "24" in hw.get("gpu_1", "") else "32b" if "16" in hw.get("gpu_1", "") else "8b")
+            self.hw_match_btn = ctk.CTkButton(
+                s_box,
+                text=f"⚡ Match HW ({quick_term[:10]})",
+                width=110,
+                height=30,
+                fg_color="#18181b",
+                hover_color="#27272a",
+                border_width=1,
+                border_color="#3f3f46",
+                text_color="#f4f4f5",
+                font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+                corner_radius=6,
+                command=lambda: self._quick_search_hw(quick_term),
+            )
+            self.hw_match_btn.pack(side="left")
+            ToolTip(self.hw_match_btn, f"Search models matching your hardware spec profile: {quick_term}")
 
         # Status & File List Container
         self.list_card = ctk.CTkFrame(
@@ -2330,6 +2716,13 @@ class ModelDownloaderDialog(ctk.CTkToplevel):
     def _clear_scroll_frame(self):
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
+
+    def _quick_search_hw(self, term: str):
+        if not term:
+            return
+        self.repo_entry.delete(0, "end")
+        self.repo_entry.insert(0, term)
+        self._search_huggingface()
 
     def _search_huggingface(self):
         """Search Hugging Face models by query keyword."""
@@ -3076,13 +3469,6 @@ class LlamaLauncher(ctk.CTk):
         self.recent_models = []
         self._load_recent_models()
 
-        # Configurable Model Library & App Config
-        self.app_config = {}
-        self.models_dir = ""
-        self.scanned_models_map = {}
-        self._scan_thread = None
-        self._load_app_config()
-
         # Process management & desktop ergonomics state
         self.log_queue = queue.Queue()
         self.log_buffer = collections.deque(maxlen=2000)
@@ -3095,6 +3481,14 @@ class LlamaLauncher(ctk.CTk):
         self.crash_count = 0
         self.last_crash_time = 0
         self.tray_icon = None
+
+        # Configurable Model Library & App Config
+        self.app_config = {}
+        self.models_dir = ""
+        self.hardware_specs = {}
+        self.scanned_models_map = {}
+        self._scan_thread = None
+        self._load_app_config()
 
         # Live Inference Telemetry State (Phase 2)
         self._metrics_stop_event = threading.Event()
@@ -3183,7 +3577,7 @@ class LlamaLauncher(ctk.CTk):
             pass
 
     def _load_app_config(self):
-        """Load persistent application configurations including models_dir."""
+        """Load persistent application configurations including models_dir, hardware specs, and ergonomics."""
         self.app_config = {}
         if os.path.exists(APP_CONFIG_FILE):
             try:
@@ -3203,10 +3597,25 @@ class LlamaLauncher(ctk.CTk):
                 if os.path.isdir(default_models):
                     self.models_dir = default_models
 
+        self.hardware_specs = self.app_config.get("hardware_specs", {})
+        if "auto_restart" in self.app_config and hasattr(self, "auto_restart_var"):
+            self.auto_restart_var.set(bool(self.app_config["auto_restart"]))
+        if "external_console" in self.app_config and hasattr(self, "external_console_var"):
+            self.external_console_var.set(bool(self.app_config["external_console"]))
+        if "minimize_to_tray" in self.app_config and hasattr(self, "minimize_to_tray_var"):
+            self.minimize_to_tray_var.set(bool(self.app_config["minimize_to_tray"]))
+
     def _persist_app_config(self):
         """Persist application configurations to app_config.json."""
         try:
             self.app_config["models_dir"] = self.models_dir
+            self.app_config["hardware_specs"] = getattr(self, "hardware_specs", {})
+            if hasattr(self, "auto_restart_var"):
+                self.app_config["auto_restart"] = bool(self.auto_restart_var.get())
+            if hasattr(self, "external_console_var"):
+                self.app_config["external_console"] = bool(self.external_console_var.get())
+            if hasattr(self, "minimize_to_tray_var"):
+                self.app_config["minimize_to_tray"] = bool(self.minimize_to_tray_var.get())
             with open(APP_CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.app_config, f, indent=2)
         except Exception:
@@ -3483,6 +3892,14 @@ class LlamaLauncher(ctk.CTk):
         ram_gb = ram_bytes / (1024 ** 3)
 
         device_total_vram = self.device_vram_map.get(dev_disp, 16.0)
+        hw_vram = getattr(self, "hardware_specs", {}).get("vram_gb", "")
+        if hw_vram and not is_cpu_only:
+            try:
+                v_num = float(hw_vram)
+                if v_num > 0:
+                    device_total_vram = v_num
+            except Exception:
+                pass
         if is_cpu_only:
             device_total_vram = 32.0
             headroom_gb = 32.0 - ram_gb
@@ -3578,6 +3995,15 @@ class LlamaLauncher(ctk.CTk):
             return
 
         total_vram_gb = self.device_vram_map.get(dev_disp, 16.0)
+        # Check if user specified custom VRAM in Settings hardware specs
+        hw_vram = getattr(self, "hardware_specs", {}).get("vram_gb", "")
+        if hw_vram:
+            try:
+                v_num = float(hw_vram)
+                if v_num > 0:
+                    total_vram_gb = v_num
+            except Exception:
+                pass
 
         # Parse safety margin from extra flags if specified, else 1.0 GB
         safety_gb = 1.0
@@ -5369,6 +5795,22 @@ class LlamaLauncher(ctk.CTk):
         )
         self.drawer_toggle_btn.pack(side="left", padx=(0, 10))
 
+        self.settings_btn = ctk.CTkButton(
+            self.drawer_bar,
+            text="⚙  Settings",
+            height=28,
+            width=100,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            border_width=1,
+            border_color="#3f3f46",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#f4f4f5",
+            corner_radius=6,
+            command=self.open_settings_dialog,
+        )
+        self.settings_btn.pack(side="left", padx=(0, 10))
+
         # Watchdog & window mode checkboxes
         self.auto_restart_chk = ctk.CTkCheckBox(
             self.drawer_bar,
@@ -5382,6 +5824,7 @@ class LlamaLauncher(ctk.CTk):
             border_width=2,
             corner_radius=4,
             height=24,
+            command=self._persist_app_config,
         )
         self.auto_restart_chk.pack(side="left", padx=(0, 12))
 
@@ -5397,6 +5840,7 @@ class LlamaLauncher(ctk.CTk):
             border_width=2,
             corner_radius=4,
             height=24,
+            command=self._persist_app_config,
         )
         self.external_console_chk.pack(side="left", padx=(0, 12))
 
@@ -5412,6 +5856,7 @@ class LlamaLauncher(ctk.CTk):
             border_width=2,
             corner_radius=4,
             height=24,
+            command=self._persist_app_config,
         )
         self.tray_close_chk.pack(side="left", padx=(0, 10))
 
@@ -5636,6 +6081,7 @@ class LlamaLauncher(ctk.CTk):
 
             # Log Console & Bottom Drawer Toolbar
             "drawer_toggle_btn": "Expand or collapse embedded live log console",
+            "settings_btn": "Open application settings & system hardware specifications",
             "auto_restart_chk": "Automatically restart server if process crashes unexpectedly",
             "external_console_chk": "Launch server in separate Windows Command Prompt console",
             "tray_close_chk": "Minimize application to system tray instead of closing",
@@ -5757,6 +6203,8 @@ class LlamaLauncher(ctk.CTk):
         # Drawer & Bottom Bar
         if hasattr(self, "drawer_toggle_btn"):
             ToolTip(self.drawer_toggle_btn, tips["drawer_toggle_btn"])
+        if hasattr(self, "settings_btn"):
+            ToolTip(self.settings_btn, tips["settings_btn"])
         if hasattr(self, "auto_restart_chk"):
             ToolTip(self.auto_restart_chk, tips["auto_restart_chk"])
         if hasattr(self, "external_console_chk"):
@@ -5900,6 +6348,10 @@ class LlamaLauncher(ctk.CTk):
     def open_profile_helper(self):
         """Open the Profile Helper dialog to generate AI optimization prompts from hardware specs."""
         ProfileHelperDialog(master=self)
+
+    def open_settings_dialog(self):
+        """Open the Settings & Hardware Specifications flyout dialog."""
+        SettingsDialog(self)
 
     def open_model_downloader(self):
         """Open the Hugging Face GGUF Model Explorer & Downloader flyout dialog."""
